@@ -1,2 +1,0 @@
-# WienerCalc
-Upgrade foodcalc app
