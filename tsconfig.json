@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "es2022",         /* This is the modern JavaScript version we'll use */
+    "module": "commonjs",      /* This is the module system Electron's main process uses */
+    "outDir": "./dist",        /* This is the folder where our compiled .js files will go */
+    "strict": true,            /* Enables strict type-checking */
+    "esModuleInterop": true,   /* Helps with 'import' statements */
+    "skipLibCheck": true       /* Skips type checking of declaration files */
+  },
+  "include": [
+  "src/main.ts",
+  "src/preload.ts",
+  "src/renderer.ts",
+  "src/preload.d.ts",
+  "src/types/custom.d.ts"
+]
+}

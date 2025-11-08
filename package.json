@@ -1,0 +1,33 @@
+{
+  "name": "foodcalcnew",
+  "version": "1.0.0",
+  "description": "",
+  "main": "dist/main.js",
+  "scripts": {
+  "watch:scss": "sass --watch src/scss/main.scss src/styles.css",
+  "build": "tsc",
+  "watch:ts": "tsc --watch",
+  "start": "electron .",
+  "dev": "npm run build && npm-run-all --parallel watch:scss watch:ts start",
+  "test": "echo \"Error: no test specified\" && exit 1"
+},
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@formkit/auto-animate": "^0.9.0",
+    "animejs": "^4.2.2",
+    "csv-parse": "^6.1.0",
+    "echarts": "^6.0.0",
+    "electron": "^38.3.0",
+    "exceljs": "^4.4.0",
+    "simple-statistics": "^7.8.8",
+    "sqlite3": "^5.1.7",
+    "typescript": "^5.9.3"
+  },
+  "devDependencies": {
+    "@types/animejs": "^3.1.13",
+    "npm-run-all": "^4.1.5",
+    "sass": "^1.93.3"
+  }
+}

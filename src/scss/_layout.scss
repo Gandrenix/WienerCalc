@@ -1,0 +1,39 @@
+// src/scss/_layout.scss
+
+[data-theme="dark"] {
+
+    // 1. Estilo para los paneles de las pestañas
+    article {
+        background-color: var(--card-background-color);
+        border: 1px solid var(--card-border-color);
+        padding: 20px;
+        border-radius: $border-radius;
+        margin-top: 1rem; // Espacio debajo de la barra de navegación
+    }
+
+    // 2. Estilos para los contenedores que YA teníamos
+    #editFoodFormContainer,
+    #reportCriteria,
+    #analysisCriteria,
+    #importLogContainer {
+        background-color: var(--card-background-color);
+        border: 1px solid var(--card-border-color);
+        padding: 20px;
+        border-radius: $border-radius;
+        margin-bottom: 20px;
+    }
+
+    // 3. Grid para la pestaña de "Biblioteca"
+    #library-grid {
+        display: grid;
+        grid-template-columns: 1fr 2fr; // Columna izquierda 1 parte, derecha 2 partes
+        gap: 2rem; // Espacio entre columnas
+    }
+
+    // (Opcional) Ajuste para pantallas más pequeñas
+    @media (max-width: 900px) {
+        #library-grid {
+            grid-template-columns: 1fr; // Una sola columna
+        }
+    }
+}

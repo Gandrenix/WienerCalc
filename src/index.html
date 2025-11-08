@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <title>WienerCalc App</title>
+    
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css"/>
+    
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <main class="container">
+
+    <nav>
+        <ul>
+            <li><strong>WienerCalc App</strong></li>
+        </ul>
+        <ul>
+            <li><a href="#library" class="secondary" role="button">Biblioteca de Alimentos</a></li>
+            <li><a href="#log" class="secondary" role="button">Registro Diario</a></li>
+            <li><a href="#reporting" class="secondary" role="button">Cálculos y Reportes</a></li>
+        </ul>
+    </nav>
+
+    <article id="library">
+        <h1>Food Library Management</h1>
+        
+        <div id="library-grid">
+            
+            <div id="library-col-left">
+                <h2>Add a New Food (to Library)</h2>
+                <form id="foodForm">
+                    <label for="foodName">Food Name:</label>
+                    <input type="text" id="foodName" placeholder="e.g., Apple">
+                    <button type="submit">Save Food</button>
+                </form>
+
+                <hr>
+
+                <h2>Import Food Library</h2>
+                <label for="importDbSelect">Import into Database:</label>
+                <select id="importDbSelect"></select>
+                <button id="importBtn">Import from Excel (.xlsx)</button>
+                <button id="importCsvBtn">Import from CSV (.csv)</button>
+                <p id="importStatus"></p>
+
+                <hr>
+                
+                <h2>Database Management</h2>
+                <div>
+                    <label for="dbSelect">Target Database:</label>
+                    <select id="dbSelect"></select>
+                    <button id="addDbBtn">Add New DB</button>
+                    <input type="text" id="newDbName" placeholder="New DB Name" style="display: none;">
+                    <button id="saveNewDbBtn" style="display: none;">Save DB</button>
+                    <button id="deleteDbBtn" class="delete-btn">Delete Selected DB</button>
+                </div>
+            </div>
+            
+            <div id="library-col-right">
+                <details open>
+                    <summary><h2>Food List (Library)</h2></summary>
+                    <div id="foodList">
+                        <p>Loading food list...</p>
+                    </div>
+                </details>
+
+                <div id="editFoodFormContainer" style="display: none;">
+                    <h2>Edit Food Details</h2>
+                    <input type="hidden" id="editFoodId">
+                    <div><label for="editFoodName">Food Name:</label><input type="text" id="editFoodName"></div>
+                    <hr>
+                    <h3>Macronutrients & Energy</h3>
+                    <div><label for="editEnergyKcal">Energy (kcal):</label><input type="number" step="any" id="editEnergyKcal" placeholder="e.g., 89"></div>
+                    <div><label for="editWaterG">Water (g):</label><input type="number" step="any" id="editWaterG" placeholder="e.g., 75.5"></div>
+                    <div><label for="editProteinG">Protein (g):</label><input type="number" step="any" id="editProteinG" placeholder="e.g., 1.1"></div>
+                    <div><label for="editFatG">Total Fat (g):</label><input type="number" step="any" id="editFatG" placeholder="e.g., 0.3"></div>
+                    <div><label for="editCarbohydrateG">Carbohydrate (g):</label><input type="number" step="any" id="editCarbohydrateG" placeholder="e.g., 22.8"></div>
+                    <div><label for="editFiberG">Fiber (g):</label><input type="number" step="any" id="editFiberG" placeholder="e.g., 2.6"></div>
+                    <div><label for="editSugarG">Sugar (g):</label><input type="number" step="any" id="editSugarG" placeholder="e.g., 12.2"></div>
+                    <div><label for="editAshG">Ash (g):</label><input type="number" step="any" id="editAshG" placeholder="e.g., 0.3"></div>
+                    <hr>
+                    <h3>Fat Details</h3>
+                    <div><label for="editSaturatedFatG">Saturated Fat (g):</label><input type="number" step="any" id="editSaturatedFatG" placeholder="e.g., 0.1"></div>
+                    <div><label for="editMonounsaturatedFatG">Monounsaturated Fat (g):</label><input type="number" step="any" id="editMonounsaturatedFatG" placeholder="e.g., 0.05"></div>
+                    <div><label for="editPolyunsaturatedFatG">Polyunsaturated Fat (g):</label><input type="number" step="any" id="editPolyunsaturatedFatG" placeholder="e.g., 0.1"></div>
+                    <div><label for="editCholesterolMg">Cholesterol (mg):</label><input type="number" step="any" id="editCholesterolMg" placeholder="e.g., 0"></div>
+                    <hr>
+                    <h3>Minerals</h3>
+                    <div><label for="editCalciumMg">Calcium (mg):</label><input type="number" step="any" id="editCalciumMg" placeholder="e.g., 5"></div>
+                    <div><label for="editPhosphorusMg">Phosphorus (mg):</label><input type="number" step="any" id="editPhosphorusMg" placeholder="e.g., 11"></div>
+                    <div><label for="editIronMg">Iron (mg):</label><input type="number" step="any" id="editIronMg" placeholder="e.g., 0.12"></div>
+                    <div><label for="editSodiumMg">Sodium (mg):</label><input type="number" step="any" id="editSodiumMg" placeholder="e.g., 1"></div>
+                    <div><label for="editPotassiumMg">Potassium (mg):</label><input type="number" step="any" id="editPotassiumMg" placeholder="e.g., 107"></div>
+                    <div><label for="editMagnesiumMg">Magnesium (mg):</label><input type="number" step="any" id="editMagnesiumMg" placeholder="e.g., 5"></div>
+                    <div><label for="editZincMg">Zinc (mg):</label><input type="number" step="any" id="editZincMg" placeholder="e.g., 0.04"></div>
+                    <div><label for="editCopperMg">Copper (mg):</label><input type="number" step="any" id="editCopperMg" placeholder="e.g., 0.03"></div>
+                    <div><label for="editManganeseMg">Manganese (mg):</label><input type="number" step="any" id="editManganeseMg" placeholder="e.g., 0.04"></div>
+                    <hr>
+                    <h3>Vitamins</h3>
+                    <div><label for="editVitaminAER">Vitamin A (ER/µg):</label><input type="number" step="any" id="editVitaminAER" placeholder="e.g., 3"></div>
+                    <div><label for="editThiaminMg">Thiamin (B1) (mg):</label><input type="number" step="any" id="editThiaminMg" placeholder="e.g., 0.02"></div>
+                    <div><label for="editRiboflavinMg">Riboflavin (B2) (mg):</label><input type="number" step="any" id="editRiboflavinMg" placeholder="e.g., 0.03"></div>
+                    <div><label for="editNiacinMg">Niacin (B3) (mg):</label><input type="number" step="any" id="editNiacinMg" placeholder="e.g., 0.09"></div>
+                    <div><label for="editPantothenicAcidMg">Pantothenic Acid (B5) (mg):</label><input type="number" step="any" id="editPantothenicAcidMg" placeholder="e.g., 0.06"></div>
+                    <div><label for="editVitaminB6Mg">Vitamin B6 (mg):</label><input type="number" step="any" id="editVitaminB6Mg" placeholder="e.g., 0.04"></div>
+                    <div><label for="editFolateMcg">Folate (B9) (µg):</label><input type="number" step="any" id="editFolateMcg" placeholder="e.g., 3"></div>
+                    <div><label for="editVitaminB12Mcg">Vitamin B12 (µg):</label><input type="number" step="any" id="editVitaminB12Mcg" placeholder="e.g., 0"></div>
+                    <div><label for="editVitaminCMg">Vitamin C (mg):</label><input type="number" step="any" id="editVitaminCMg" placeholder="e.g., 4.6"></div>
+
+                    <div>
+                        <button id="saveEditFoodBtn">Save Changes</button>
+                        <button id="cancelEditFoodBtn">Cancel</button>
+                    </div>
+                </div>
+            </div> </div> </article>
+
+
+    <article id="log" hidden>
+        <h1>Daily Consumption Log</h1>
+
+        <div>
+            <label for="refDbSelect">Reference DB:</label>
+            <select id="refDbSelect"></select>
+        </div>
+        <div>
+            <label for="userIdInput">User/Group ID:</label>
+            <input type="text" id="userIdInput" list="userIdDataList" placeholder="Enter or select User ID">
+        </div>
+        <div>
+            <label for="consumptionDate">Date:</label>
+            <input type="date" id="consumptionDate">
+        </div>
+
+        <div id="importLogContainer">
+            <strong>Import Log Entries:</strong>
+            <button id="importLogBtn">Import Log from Excel (.xlsx)</button>
+            <button id="importLogCsvBtn">Import Log from CSV (.csv)</button>
+            <p id="importLogStatus" style="display: inline; margin-left: 10px;"></p>
+        </div>
+
+        <h2>Add Log Entry</h2>
+        <form id="logForm">
+            <div>
+                <label for="mealTypeSelect">Meal Type (Opt.):</label>
+                <select id="mealTypeSelect">
+                    <option value="">-- Select --</option>
+                    <option value="Breakfast">Breakfast</option>
+                    <option value="Lunch">Lunch</option>
+                    <option value="Dinner">Dinner</option>
+                    <option value="Snack">Snack</option>
+                </select>
+            </div>
+            <div>
+                <label for="foodSearchInput">Search Food:</label>
+                <input type="text" id="foodSearchInput" placeholder="Type to search in Reference DB...">
+                <select id="foodSelect" disabled>
+                    <option value="">-- Select Food --</option>
+                </select>
+            </div>
+            <div>
+                <label for="gramsInput">Grams:</label>
+                <input type="number" id="gramsInput" placeholder="e.g., 150" step="0.1" required>
+            </div>
+            <button type="submit">Add Entry</button>
+        </form>
+
+        <details open>
+            <summary><h2>Log Entries for Selected Date</h2></summary>
+            <div id="logEntries">
+                <p>Select User/Group and Date above to see entries.</p>
+            </div>
+        </details>
+    </article>
+
+
+    <article id="reporting" hidden>
+        <h1>Nutrient Calculation & Reporting</h1>
+
+        <div id="reportCriteria">
+            <div>
+                <label for="reportUserIdInput">User/Group ID(s):</label>
+                <input type="text" id="reportUserIdInput" list="userIdDataList" placeholder="e.g., UserA, UserB, UserC">
+                <small>Separa múltiples UserIDs con coma (,) para análisis de grupo.</small>
+            </div>
+            <div>
+                <label for="reportStartDate">Start Date:</label>
+                <input type="date" id="reportStartDate">
+                <label for="reportEndDate">End Date:</label>
+                <input type="date" id="reportEndDate">
+            </div>
+            <div>
+                <label for="reportRefDbSelect">Reference Database:</label>
+                <select id="reportRefDbSelect">
+                    <option value="-1">-- Select Database --</option>
+                </select>
+            </div>
+            <div>
+                <button id="calculateBtn">Calculate TOTALS (Table)</button>
+            </div>
+        </div>
+
+        <hr>
+        <h2>Analysis & Graphs (v0.3)</h2>
+        <div id="analysisCriteria">
+            <div>
+                <label for="nutrientSelect">Nutrient to Analyze:</label>
+                <select id="nutrientSelect">
+                    <option value="totalEnergy_kcal">Energy (kcal)</option>
+                </select>
+            </div>
+            
+            <div>
+                <strong>Epidemiology (Group Analysis):</strong><br>
+                <button id="calcStatsBtn">Get Group Statistics</button>
+                <button id="renderHistogramBtn">Show Distribution (Histogram)</button>
+                <button id="renderBoxPlotBtn">Compare Groups (Box Plot)</button>
+            </div>
+            
+            <div>
+                <strong>Nutrition (Individual Analysis):</strong><br>
+                <small><i>Nota: Para análisis individual, ingrese solo un UserID en el campo de arriba.</i></small><br>
+                <button id="renderTopFoodsBtn">Top 5 Food Sources (Pie)</button>
+                <button id="renderMealBtn">Intake by Meal (Pie)</button>
+                <button id="renderOverTimeBtn">Intake Over Time (Line)</button>
+            </div>
+        </div>
+
+        <div id="chartContainer" style="display: none;">
+        </div>
+
+        <div id="statsResults">
+        </div>
+        
+        <h2>Report Results (Totals Table)</h2>
+        <div id="exportControls" style="display: none;">
+            <button id="exportCsvBtn">Export as CSV</button>
+            <button id="exportExcelBtn">Export as Excel (.xlsx)</button>
+        </div>
+
+        <div id="reportResults">
+            <p>Please select criteria and click "Calculate Intake".</p>
+        </div>
+    </article>
+
+    
+    <datalist id="userIdDataList">
+    </datalist>
+
+    <div id="editLogModal" style="display: none;">
+        <h3>Edit Grams</h3>
+        <p>Updating entry for: <strong id="editLogFoodName"></strong></p>
+        <input type="hidden" id="editLogId">
+        <div>
+            <label for="editLogGramsInput">Grams:</label>
+            <input type="number" step="any" id="editLogGramsInput" placeholder="e.g., 150">
+        </div>
+        <div>
+            <button id="cancelEditLogBtn">Cancel</button>
+            <button id="saveEditLogBtn">Save Grams</button>
+        </div>
+    </div>
+    
+    <script src="../node_modules/echarts/dist/echarts.min.js"></script>
+    <script src="../node_modules/echarts/dist/extension/dataTool.min.js"></script>
+    <script src="../node_modules/animejs/lib/anime.min.js"></script>
+    <script src="../node_modules/@formkit/auto-animate/index.global.js"></script>
+    <script src="../dist/renderer.js"></script>
+
+</main>
+     
+</body>
+</html>
