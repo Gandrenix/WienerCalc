@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "es2022",
+    "module": "commonjs",
+    "outDir": "./dist",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true
+  },
+  "include": [
+    "src/main.ts",
+    "src/preload.ts",
+    "src/renderer.ts",
+    "src/preload.d.ts",
+    "src/types/custom.d.ts"
+  ]
+}
