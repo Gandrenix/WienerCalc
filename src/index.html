@@ -57,6 +57,7 @@
         <label for="dbSelect">Target Database:</label>
         <select id="dbSelect"></select>
         <button id="deleteDbBtn" class="delete-btn">Delete Selected DB</button>
+        <button id="purgeDbBtn" class="delete-btn" style="margin-left: 10px;">Purge Foods from DB</button>
         <button id="addDbBtn" style="margin-left: 20px;">Add New DB</button>
         <input type="text" id="newDbName" placeholder="New DB Name" style="display: none;">
         <button id="saveNewDbBtn" style="display: none;">Save DB</button>
@@ -142,9 +143,11 @@
             </select>
     </div>
     <div>
+    
         <label for="userIdInput">User/Group ID:</label>
         <input type="text" id="userIdInput" list="userIdDataList" placeholder="Enter or select User ID">
-    </div>
+        <button id="deleteUserLogsBtn" class="delete-btn" style="min-width: 0; margin-left: 5px;" title="Delete All Logs for this User">Delete User Logs</button>
+</div>
     <div>
         <label for="consumptionDate">Date:</label>
         <input type="date" id="consumptionDate">
@@ -155,6 +158,7 @@
         <button id="importLogBtn" style="margin-left: 10px;">Import Log from Excel (.xlsx)</button>
         <button id="importLogCsvBtn" style="margin-left: 10px;">Import Log from CSV (.csv)</button>
         <p id="importLogStatus" style="display: inline; margin-left: 10px;"></p>
+        <button id="deleteAllLogsBtn" class="delete-btn" style="margin-left: 20px; float: right;">Delete ALL Log Entries (DANGER)</button>
     </div>
 
     <h2>Add Log Entry</h2>

@@ -159,7 +159,10 @@ export interface IElectronAPI {
   getDatabases: () => Promise<IDatabaseInfo[]>;
   addDatabase: (dbName: string) => Promise<string>;
   deleteDatabase: (databaseId: number) => Promise<string>;
-
+  purgeFoodLibrary: (databaseId: number) => Promise<string>;
+  deleteLogsForUser: (userId: string) => Promise<string>;
+  deleteAllLogs: () => Promise<string>;
+  
   // Consumption Log
   searchFoods: (searchTerm: string, referenceDbId: number) => Promise<ISearchFoodResult[]>;
   addLogEntry: (logData: INewLogEntryData) => Promise<string>;
@@ -172,6 +175,9 @@ export interface IElectronAPI {
   importConsumptionLogCsv: () => Promise<{ message: string, firstEntry?: { userId: string, date: string } }>;
   
   getUniqueUserIds: () => Promise<string[]>;
+
+  deleteLogsForUser: (userId: string) => Promise<string>;
+  deleteAllLogs: () => Promise<string>;
 
   // Calculation Function (v0.2)
   calculateIntake: (

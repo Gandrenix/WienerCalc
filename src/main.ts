@@ -469,6 +469,75 @@ ipcMain.handle('update-food-details', async (event, foodData: IFoodDetails): Pro
 });
 
 
+//El main handle para purgar las bases de datos
+ipcMain.handle('purge-food-library', async (event, databaseId: number): Promise<string> => {
+  // ...
+  return new Promise((resolve, reject) => {
+    if (!databaseId || databaseId <= 0) {
+      // ...
+      return reject('Invalid Database ID provided.');
+    }
+    
+    /* <-- ASEGÚRATE DE QUE ESTO SIGUE COMENTADO
+    // Protección eliminada por solicitud del usuario (para poder limpiar la DB "Default")
+    if (databaseId === 1) { 
+      console.log('[IPC] Debug: Rejecting. Attempt to purge "Default" DB.'); 
+      return reject('Cannot purge the "Default" database. You can only delete individual items from it.');
+    }
+    */
+
+    // Añadimos un log para saber si estamos purgando la DB "Default"
+    if (databaseId === 1) {
+      console.warn('[IPC] Debug: ¡ATENCIÓN! Purgando la base de datos "Default".');
+    }
+
+    const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, (err: Error | null) => {
+      if (err) {
+        console.error('[IPC] Debug: DB connection error.', err.message); // <-- LOG D (ERROR)
+        return reject(`Database connection error: ${err.message}`);
+      }
+      console.log('[IPC] Debug: Database connected.'); // <-- LOG E
+    });
+
+    db.run('PRAGMA foreign_keys = ON;', (pragmaErr: Error | null) => {
+      if (pragmaErr) {
+        console.error('[IPC] Debug: Failed to enable foreign keys.', pragmaErr.message); // <-- LOG F (ERROR)
+        db.close();
+        return reject(`Failed to enable foreign keys: ${pragmaErr.message}`);
+      }
+      
+      const deleteQuery = `DELETE FROM Foods WHERE DatabaseID = ?`;
+      console.log(`[IPC] Debug: Attempting to run query: ${deleteQuery} with ID ${databaseId}`); // <-- LOG G
+
+      db.run(deleteQuery, [databaseId], function (this: sqlite3.RunResult, err: Error | null) {
+        if (err) {
+          console.error('[IPC] Debug: SQL query failed.', err.message); // <-- LOG H (ERROR)
+          db.close();
+          reject(`Error purging library: ${err.message}`);
+          return;
+        }
+
+        console.log(`[IPC] Debug: SQL query successful. Changes: ${this.changes}`); // <-- LOG I
+
+        db.close((closeErr: Error | null) => {
+          if (closeErr) console.error('[IPC] Debug: Error closing DB after query:', closeErr.message);
+        });
+
+        if (this.changes === 0) {
+          console.log('[IPC] Debug: Query ran but found 0 rows to delete.'); // <-- LOG J
+          resolve('No foods found in that library to delete.');
+        } else {
+          console.log(`[IPC] Debug: Successfully purged ${this.changes} food(s).`); // <-- LOG K
+          resolve(`Successfully purged ${this.changes} food entries from the database.`);
+        }
+      });
+    });
+  });
+});
+
+
+
+
 ipcMain.handle('delete-food', async (event, foodId: number): Promise<string> => {
     return new Promise((resolve, reject) => {
         if (!foodId || foodId <= 0) return reject('Invalid Food ID provided.');
@@ -803,6 +872,31 @@ ipcMain.handle('delete-log-entry', async (event, logId: number): Promise<string>
         });
     });
 });
+
+ipcMain.handle('delete-all-logs', async (): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, (err: Error | null) => {
+      if (err) return reject(`Database connection error: ${err.message}`);
+    });
+
+    const deleteQuery = `DELETE FROM ConsumptionLog`;
+    console.log(`Attempting to delete ALL logs from ConsumptionLog table...`);
+
+    db.run(deleteQuery, [], function (this: sqlite3.RunResult, err: Error | null) {
+      db.close((closeErr: Error | null) => {
+        if (closeErr) console.error('Error closing database (delete-all-logs):', closeErr.message);
+      });
+
+      if (err) {
+        console.error('Error deleting all logs:', err.message);
+        reject(`Error deleting all logs: ${err.message}`);
+      } else {
+        resolve(`Successfully deleted all ${this.changes} log entries from the table.`);
+      }
+    });
+  });
+});
+
 
 ipcMain.handle('edit-log-entry', async (
     event,

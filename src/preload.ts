@@ -40,8 +40,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   addDatabase: (dbName: string): Promise<string> =>
     ipcRenderer.invoke('add-database', dbName),
 
-  deleteDatabase: (databaseId: number): Promise<string> =>
+  deleteDatabase: (databaseId: number): Promise<string> => // <-- Esta es la línea existente [cite: 5051]
     ipcRenderer.invoke('delete-database', databaseId),
+
+  // *** NUEVA LÍNEA 1 ***
+  // Añadida para la función de purgar alimentos de una biblioteca
+  purgeFoodLibrary: (databaseId: number): Promise<string> =>
+    ipcRenderer.invoke('purge-food-library', databaseId),
 
   // --- Consumption Log Management ---
   searchFoods: (searchTerm: string, referenceDbId: number): Promise<ISearchFoodResult[]> =>
@@ -63,11 +68,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('import-consumption-log'),
   
   // *** NUEVO: Importar Log desde CSV ***
-  importConsumptionLogCsv: (): Promise<{ message: string, firstEntry?: { userId: string, date: string } }> =>
+  importConsumptionLogCsv: (): Promise<{ message: string, firstEntry?: { userId: string, date: string } }> => // [cite: 5053]
     ipcRenderer.invoke('import-consumption-log-csv'),
 
-  getUniqueUserIds: (): Promise<string[]> =>
+  getUniqueUserIds: (): Promise<string[]> => // <-- Esta es la línea existente [cite: 5053]
     ipcRenderer.invoke('get-unique-user-ids'),
+
+  // *** NUEVA LÍNEA 2 ***
+  // Añadida para borrar todos los logs de UN usuario
+  deleteLogsForUser: (userId: string): Promise<string> =>
+    ipcRenderer.invoke('delete-logs-for-user', userId),
+
+  // *** NUEVA LÍNEA 3 ***
+  // Añadida para borrar TODOS los logs de la base de datos
+  deleteAllLogs: (): Promise<string> =>
+    ipcRenderer.invoke('delete-all-logs'),
 
   // --- Calculation Function (v0.2) ---
   calculateIntake: (

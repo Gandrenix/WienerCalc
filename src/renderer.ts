@@ -155,6 +155,7 @@ let addDbBtn: HTMLButtonElement | null = null;
 let newDbNameInput: HTMLInputElement | null = null;
 let saveNewDbBtn: HTMLButtonElement | null = null;
 let deleteDbBtn: HTMLButtonElement | null = null;
+let purgeDbBtn: HTMLButtonElement | null = null;
 
 // Consumption Log
 let refDbSelectElement: HTMLSelectElement | null = null;
@@ -171,6 +172,8 @@ let importLogButton: HTMLButtonElement | null = null; // Import Log button
 let importLogCsvBtn: HTMLButtonElement | null = null; // *** NUEVO: Import Log CSV ***
 let importLogStatus: HTMLElement | null = null; // Import Log status
 let userIdDataListElement: HTMLDataListElement | null = null; // *** NUEVO: DataList ***
+let deleteAllLogsBtn: HTMLButtonElement | null = null;
+let deleteUserLogsBtn: HTMLButtonElement | null = null;
 
 // Detailed Food Edit Form
 let editFoodFormContainer: HTMLElement | null = null;
@@ -1143,7 +1146,8 @@ async function handleRenderHistogram() {
             title: {
                 text: `Distribution of ${criteria.nutrientLabel}`,
                 subtext: `Daily Averages for ${stats.count} Users`,
-                left: 'center'
+                left: 'center',
+                top: 20
             },
             tooltip: {
                 trigger: 'axis',
@@ -1245,7 +1249,8 @@ async function handleRenderPieChart(type: 'food' | 'meal') {
             title: {
                 text: titleText,
                 subtext: `User: ${criteria.singleUserId} (${criteria.startDate} to ${criteria.endDate})`,
-                left: 'center'
+                left: 'center',
+                top: 20
             },
             tooltip: {
                 trigger: 'item',
@@ -1259,7 +1264,8 @@ async function handleRenderPieChart(type: 'food' | 'meal') {
             series: [{
                 name: 'Contribution',
                 type: 'pie',
-                radius: '60%',
+                radius: '55%',
+                center: ['55%', '50%'],
                 data: data.map(item => ({...item, value: parseFloat(item.value.toFixed(2))})), // Formatear valor
                 emphasis: {
                     itemStyle: {
@@ -1280,6 +1286,149 @@ async function handleRenderPieChart(type: 'food' | 'meal') {
         if (reportResultsElement) reportResultsElement.innerHTML = '';
     }
 }
+
+// Borrar todos los logs de un click
+
+async function handleDeleteAllLogs() {
+  // 1. Primera Confirmación
+  const confirm1 = await window.electronAPI.showConfirmDialog({
+    type: 'warning',
+    title: 'Confirm Delete ALL Logs',
+    message: 'Are you sure you want to delete ALL consumption log entries for ALL users?',
+    detail: 'This action is irreversible and will completely empty the log. This cannot be undone.',
+    buttons: ['Cancel', 'Yes, Delete All Logs'],
+    defaultId: 0, cancelId: 0
+  });
+
+  if (confirm1.response !== 1) return;
+
+  // 2. Segunda Confirmación (MUY Fuerte)
+  const confirm2 = await window.electronAPI.showConfirmDialog({
+    type: 'error',
+    title: 'FINAL WARNING',
+    message: 'This will delete EVERY log entry in the database. Are you absolutely sure?',
+    buttons: ['Cancel', 'Yes, I understand, delete everything.'],
+    defaultId: 0, cancelId: 0
+  });
+
+  if (confirm2.response !== 1) return;
+
+  try {
+    const result = await window.electronAPI.deleteAllLogs();
+    await window.electronAPI.showInfoDialog('Success', result);
+    loadAndDisplayLogEntries(); // Recargar la lista de logs (que estará vacía)
+    loadUniqueUserIDs(); // Recargar la lista de usuarios (que estará vacía)
+  } catch (error) {
+    console.error("Failed to delete all logs:", error);
+    await window.electronAPI.showErrorDialog('Error Deleting All Logs', String(error));
+  }
+}
+
+
+async function handleDeleteLogsForUser() {
+  if (!userIdInputElement) {
+    console.error("UserID input element not found.");
+    return;
+  }
+  const userId = userIdInputElement.value.trim();
+
+  if (!userId) {
+    await window.electronAPI.showErrorDialog('Invalid UserID', 'Please enter a UserID to delete.');
+    return;
+  }
+  
+  const confirm1 = await window.electronAPI.showConfirmDialog({
+    type: 'warning',
+    title: 'Confirm Delete User Logs',
+    message: `Are you sure you want to delete ALL log entries for "${userId}"?`,
+    detail: 'This will permanently remove all consumption records for this user, across all dates. This action is irreversible.',
+    buttons: ['Cancel', 'Yes, Delete All'],
+    defaultId: 0, cancelId: 0
+  });
+
+  if (confirm1.response !== 1) return; // Si no es "Yes, Delete All"
+
+  try {
+    const result = await window.electronAPI.deleteLogsForUser(userId);
+    await window.electronAPI.showInfoDialog('Success', result);
+    loadAndDisplayLogEntries(); // Recargar la lista de logs
+    loadUniqueUserIDs(); // Recargar la lista de usuarios
+  } catch (error) {
+    console.error("Failed to delete user logs:", error);
+    await window.electronAPI.showErrorDialog('Error Deleting Logs', String(error));
+  }
+}
+
+// Funcion de purga de la base de datos
+
+// En src/renderer.ts
+async function handlePurgeFoodLibrary() {
+  console.log('--- Debug: handlePurgeFoodLibrary Fired ---'); // <-- LOG 1
+  if (!dbSelectElement) {
+    console.error("Database select element not found.");
+    return;
+  }
+  const selectedDbId = parseInt(dbSelectElement.value, 10);
+  const selectedDbName = dbSelectElement.options[dbSelectElement.selectedIndex]?.text;
+
+  console.log(`Debug: Selected DB ID: ${selectedDbId}, Name: ${selectedDbName}`); // <-- LOG 2
+
+  if (!selectedDbId || selectedDbId <= 0) {
+    console.log('Debug: Invalid DB ID selected.'); // <-- LOG 3
+    await window.electronAPI.showErrorDialog('Invalid Selection', 'Please select a valid database to purge.');
+    return;
+  }
+  
+  // 1. Primera Confirmación
+  const confirm1 = await window.electronAPI.showConfirmDialog({
+    type: 'warning',
+    title: 'Confirm Purge Library',
+    message: `Are you sure you want to delete ALL food items from "${selectedDbName}"?`,
+    detail: 'This action is irreversible and will remove all food entries from this library. The library itself will remain.',
+    buttons: ['Cancel', 'Yes, Purge Foods'],
+    defaultId: 0, cancelId: 0
+  });
+
+  if (confirm1.response !== 1) {
+    console.log('Debug: User cancelled at first dialog.'); // <-- LOG 4
+    return;
+  }
+
+  console.log('Debug: User passed first confirmation.'); // <-- LOG 5
+
+  // 2. Segunda Confirmación (más fuerte)
+  const confirm2 = await window.electronAPI.showConfirmDialog({
+    type: 'error',
+    title: 'FINAL WARNING',
+    message: `All ${selectedDbName} foods will be deleted. Are you absolutely sure?`,
+    buttons: ['Cancel', 'Yes, Delete All Foods'],
+    defaultId: 0, cancelId: 0
+  });
+
+  if (confirm2.response !== 1) {
+    console.log('Debug: User cancelled at FINAL dialog.'); // <-- LOG 6
+    return;
+  }
+
+  console.log('Debug: User passed second confirmation. Sending IPC call...'); // <-- LOG 7
+
+  try {
+    const result = await window.electronAPI.purgeFoodLibrary(selectedDbId);
+    console.log('Debug: IPC call successful. Result:', result); // <-- LOG 8
+    await window.electronAPI.showInfoDialog('Success', result);
+    loadAndDisplayFoods(); // Recargar la lista de alimentos
+  } catch (error) {
+    console.error("Debug: IPC call FAILED.", error); // <-- LOG 9 (ERROR)
+    await window.electronAPI.showErrorDialog('Error Purging Library', String(error));
+  }
+}
+
+
+
+
+
+
+
 
 // 5. Botón "Intake Over Time (Line)"
 async function handleRenderLineChart() {
@@ -1308,7 +1457,8 @@ async function handleRenderLineChart() {
             title: {
                 text: `Daily Intake for ${criteria.nutrientLabel}`,
                 subtext: `User: ${criteria.singleUserId}`,
-                left: 'center'
+                left: 'center',
+                top: 20
             },
             tooltip: {
                 trigger: 'axis',
@@ -1361,6 +1511,7 @@ window.addEventListener('DOMContentLoaded', () => {
     newDbNameInput = document.getElementById('newDbName') as HTMLInputElement | null;
     saveNewDbBtn = document.getElementById('saveNewDbBtn') as HTMLButtonElement | null;
     deleteDbBtn = document.getElementById('deleteDbBtn') as HTMLButtonElement | null;
+    purgeDbBtn = document.getElementById('purgeDbBtn') as HTMLButtonElement | null;
 
     // Consumption Log
     refDbSelectElement = document.getElementById('refDbSelect') as HTMLSelectElement | null;
@@ -1376,7 +1527,8 @@ window.addEventListener('DOMContentLoaded', () => {
     importLogCsvBtn = document.getElementById('importLogCsvBtn') as HTMLButtonElement | null; // *** NUEVO ***
     importLogStatus = document.getElementById('importLogStatus');
     userIdDataListElement = document.getElementById('userIdDataList') as HTMLDataListElement | null;
-
+    deleteAllLogsBtn = document.getElementById('deleteAllLogsBtn') as HTMLButtonElement | null;
+    deleteUserLogsBtn = document.getElementById('deleteUserLogsBtn') as HTMLButtonElement | null;
     // Detailed Edit Form
     editFoodFormContainer = document.getElementById('editFoodFormContainer');
     editFoodIdInput = document.getElementById('editFoodId') as HTMLInputElement | null;
@@ -1546,6 +1698,24 @@ window.addEventListener('DOMContentLoaded', () => {
         console.error("Could not find Delete DB button (deleteDbBtn)");
     }
 
+
+ if (purgeDbBtn) {
+    console.log(
+      '%c--- ¡ÉXITO! Botón "purgeDbBtn" encontrado en el DOM. ---', 
+      'color: green; font-weight: bold; font-size: 14px;'
+    );
+    purgeDbBtn.addEventListener('click', handlePurgeFoodLibrary);
+    console.log(
+      '%c--- ¡ÉXITO! Listener "handlePurgeFoodLibrary" AÑADIDO. ---', 
+      'color: blue; font-weight: bold; font-size: 14px;'
+    );
+ } else {
+    console.error(
+      '%c--- ¡FALLO! No se encontró el botón con id "purgeDbBtn" en el DOM. ---', 
+      'color: red; font-weight: bold; font-size: 14px;'
+    );
+ }
+
     // Detailed Edit Form Buttons
     if (saveEditFoodBtn) { saveEditFoodBtn.addEventListener('click', handleSaveEditFood); } else { console.error("Could not find Save Edit Food button (saveEditFoodBtn)"); }
     if (cancelEditFoodBtn) { cancelEditFoodBtn.addEventListener('click', handleCancelEditFood); } else { console.error("Could not find Cancel Edit Food button (cancelEditFoodBtn)"); }
@@ -1571,6 +1741,12 @@ window.addEventListener('DOMContentLoaded', () => {
         console.error("Could not find Import Log CSV button (importLogCsvBtn)");
     }
 
+    if (deleteAllLogsBtn) {
+    deleteAllLogsBtn.addEventListener('click', handleDeleteAllLogs);
+  } else {
+    console.error("Could not find Delete All Logs button (deleteAllLogsBtn)");
+  }
+
     // Modal de Edición de Log Listeners
     if (saveEditLogBtn) {
         saveEditLogBtn.addEventListener('click', handleSaveLogEdit);
@@ -1582,6 +1758,13 @@ window.addEventListener('DOMContentLoaded', () => {
     } else {
         console.error("Could not find Cancel Log Edit button (cancelEditLogBtn)");
     }
+
+if (deleteUserLogsBtn) {
+    deleteUserLogsBtn.addEventListener('click', handleDeleteLogsForUser);
+  } else {
+    console.error("Could not find Delete User Logs button (deleteUserLogsBtn)");
+  }
+    
 
     // Calculation / Reporting (v0.2)
     if (calculateBtnElement) { calculateBtnElement.addEventListener('click', handleCalculateIntake); } else { console.error("Could not find Calculate Intake button (calculateBtnElement)"); }
@@ -1596,6 +1779,10 @@ window.addEventListener('DOMContentLoaded', () => {
     } else {
         console.error("Could not find Export Excel button (exportExcelBtn)");
     }
+
+    // ***Listener de 
+
+
 
     // *** NUEVO: Listeners de Análisis (v0.3) ***
     if (calcStatsBtn) {
@@ -1621,6 +1808,28 @@ window.addEventListener('DOMContentLoaded', () => {
     if (renderOverTimeBtn) {
         renderOverTimeBtn.addEventListener('click', handleRenderLineChart);
     } else { console.error("Could not find renderOverTimeBtn"); }
+
+   if (deleteDbBtn) {
+  deleteDbBtn.addEventListener('click', handleDeleteDatabase);
+} else {
+  console.error("Could not find Delete DB button (deleteDbBtn)");
+}
+
+// *** ASEGÚRATE DE QUE ESTE BLOQUE ESTÉ ASÍ ***
+if (purgeDbBtn) {
+    console.log(
+      '%c--- ¡ÉXITO! Botón "purgeDbBtn" encontrado y listener añadido. ---', 
+      'color: green; font-weight: bold; font-size: 14px;'
+    );
+    purgeDbBtn.addEventListener('click', handlePurgeFoodLibrary);
+} else {
+    console.error(
+      '%c--- ¡FALLO! No se encontró el botón con id "purgeDbBtn" en el DOM. ---', 
+      'color: red; font-weight: bold; font-size: 14px;'
+    );
+}
+
+
 
 
 }); // End DOMContentLoaded
