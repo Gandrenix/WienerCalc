@@ -19,6 +19,8 @@ interface IDatabaseInfo {
 interface ISearchFoodResult {
   FoodID: number;
   Name: string;
+  FoodType: 'simple' | 'recipe';
+  RecipeYieldGrams: number | null;
 }
 
 interface INewLogEntryData {
@@ -34,7 +36,7 @@ interface ILogEntry {
   LogID: number;
   UserID: string;
   ConsumptionDate: string;
-  MealType?: string | null; // Allow null from DB
+  MealType?: string | null;
   FoodID: number;
   FoodName: string; // From JOIN
   ReferenceDatabaseID: number;
@@ -43,11 +45,26 @@ interface ILogEntry {
   Timestamp: string;
 }
 
+interface IRecipeIngredient {
+  foodId: number;
+  grams: number;
+  name?: string; // 'name' es opcional. El backend lo AÑADE al leer
+}
+
+
+
 // Interface for FULL food details (including nutrients)
+
 interface IFoodDetails {
-  FoodID: number; // Needed for WHERE clause in update
-  DatabaseID?: number; // Usually fixed during update
+  FoodID: number;
+  DatabaseID?: number; // Usualmente fijo durante update
   Name: string;
+  FoodType?: 'simple' | 'recipe';
+  
+  // *** ESTA ES LA LÍNEA QUE AÑADIMOS ***
+  Ingredients?: IRecipeIngredient[];
+
+
   // Macros & Energía
   Energy_kcal?: number | null;
   Water_g?: number | null;
@@ -156,20 +173,34 @@ interface IDailyIntake {
 const dbFolderPath = path.join(app.getPath('userData'), 'database');
 const dbPath = path.join(dbFolderPath, 'foodcalc.db');
 
+// En src/main.ts
+
 // --- Initialize Database ---
-function initializeDatabase() {
-  if (!fs.existsSync(dbFolderPath)) {
-    fs.mkdirSync(dbFolderPath, { recursive: true });
-  }
+function initializeDatabase(): Promise<void> { // <-- MODIFICADO: Devuelve Promise<void>
+  
+  // Envolvemos todo en una Promesa
+  return new Promise((resolve, reject) => { 
+    
+    if (!fs.existsSync(dbFolderPath)) {
+      fs.mkdirSync(dbFolderPath, { recursive: true });
+      console.log('Created database directory:', dbFolderPath);
+    }
 
-  const db: Database = new (sqlite3.verbose().Database)(dbPath, (err: Error | null) => {
-    if (err) return console.error('Error opening database', err.message);
-    console.log('Database connected successfully at', dbPath);
-  });
+    const db: Database = new (sqlite3.verbose().Database)(dbPath, (err: Error | null) => {
+      if (err) {
+        console.error('Error opening database', err.message);
+        return reject(err); // <-- Rechaza la promesa si falla la conexión
+      }
+      console.log('Database connected successfully at', dbPath);
+    });
 
-  db.run('PRAGMA foreign_keys = ON;', (err: Error | null) => {
-    if (err) console.error("Could not enable foreign keys:", err.message);
-    else console.log("Foreign key support enabled.");
+    db.run('PRAGMA foreign_keys = ON;', (err: Error | null) => {
+      if (err) {
+        console.error("Could not enable foreign keys:", err.message);
+        return reject(err); // <-- Rechaza la promesa
+      }
+      console.log("Foreign key support enabled.");
+    });
 
     db.serialize(() => {
       // 1. Create FoodDatabases table
@@ -180,55 +211,171 @@ function initializeDatabase() {
         );
       `;
       db.run(createDbTableQuery, (err: Error | null) => {
-        if (err) return console.error('Error creating FoodDatabases table', err.message);
+        if (err) {
+          console.error('Error creating FoodDatabases table', err.message);
+          return reject(err); // <-- Rechaza la promesa
+        }
         console.log('Table "FoodDatabases" is ready.');
 
+        // Insert default DB
         db.run(`INSERT OR IGNORE INTO FoodDatabases (DatabaseName) VALUES (?)`, ['Default'], (insertErr: Error | null) => {
-          if (insertErr) console.error('Error inserting default database:', insertErr.message);
-          else console.log('Checked/Inserted "Default" database.');
+          if (insertErr) {
+            console.error('Error inserting default database:', insertErr.message);
+            return reject(insertErr); // <-- Rechaza la promesa
+          }
+          console.log('Checked/Inserted "Default" database.');
 
           // 2. Create Foods table
           const createFoodsTableQuery = `
             CREATE TABLE IF NOT EXISTS Foods (
-              FoodID INTEGER PRIMARY KEY AUTOINCREMENT, DatabaseID INTEGER NOT NULL, Name TEXT NOT NULL,
+              FoodID INTEGER PRIMARY KEY AUTOINCREMENT,
+              DatabaseID INTEGER NOT NULL,
+              Name TEXT NOT NULL,
               Energy_kcal REAL, Water_g REAL, Protein_g REAL, Fat_g REAL, Carbohydrate_g REAL,
               SaturatedFat_g REAL, MonounsaturatedFat_g REAL, PolyunsaturatedFat_g REAL, Cholesterol_mg REAL,
               Fiber_g REAL, Sugar_g REAL, Ash_g REAL, Calcium_mg REAL, Phosphorus_mg REAL, Iron_mg REAL,
               Sodium_mg REAL, Potassium_mg REAL, Magnesium_mg REAL, Zinc_mg REAL, Copper_mg REAL,
               Manganese_mg REAL, VitaminA_ER REAL, Thiamin_mg REAL, Riboflavin_mg REAL, Niacin_mg REAL,
               PantothenicAcid_mg REAL, VitaminB6_mg REAL, Folate_mcg REAL, VitaminB12_mcg REAL, VitaminC_mg REAL,
+              FoodType TEXT NOT NULL DEFAULT 'simple',
+              RecipeYieldGrams REAL DEFAULT NULL,
               FOREIGN KEY (DatabaseID) REFERENCES FoodDatabases(DatabaseID) ON DELETE CASCADE,
               UNIQUE(DatabaseID, Name)
             );
           `;
           db.run(createFoodsTableQuery, (foodsErr: Error | null) => {
-            if (foodsErr) console.error('Error creating Foods table', foodsErr.message);
-            else console.log('Table "Foods" is ready (with "tabla paisa" nutrient columns).');
+            if (foodsErr) {
+              console.error('Error creating Foods table', foodsErr.message);
+              return reject(foodsErr); // <-- Rechaza la promesa
+            }
+            console.log('Table "Foods" is ready (with FoodType column).');
 
-            // 3. Create ConsumptionLog Table
-            const createLogTableQuery = `
-              CREATE TABLE IF NOT EXISTS ConsumptionLog (
-                LogID INTEGER PRIMARY KEY AUTOINCREMENT, UserID TEXT NOT NULL, ConsumptionDate TEXT NOT NULL,
-                MealType TEXT, FoodID INTEGER NOT NULL, ReferenceDatabaseID INTEGER NOT NULL,
-                Grams REAL NOT NULL CHECK(Grams > 0), Timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (FoodID) REFERENCES Foods(FoodID) ON DELETE CASCADE,
-                FOREIGN KEY (ReferenceDatabaseID) REFERENCES FoodDatabases(DatabaseID) ON DELETE CASCADE
+            // 3. Create RecipeIngredients Table
+            const createRecipeTableQuery = `
+              CREATE TABLE IF NOT EXISTS RecipeIngredients (
+                RecipeIngredientID INTEGER PRIMARY KEY AUTOINCREMENT,
+                ParentFoodID INTEGER NOT NULL,
+                IngredientFoodID INTEGER NOT NULL,
+                IngredientGrams REAL NOT NULL,
+                FOREIGN KEY (ParentFoodID) REFERENCES Foods(FoodID) ON DELETE CASCADE,
+                FOREIGN KEY (IngredientFoodID) REFERENCES Foods(FoodID) ON DELETE CASCADE
               );
             `;
-            db.run(createLogTableQuery, (logTableErr: Error | null) => {
-              if (logTableErr) { console.error('Error creating ConsumptionLog table', logTableErr.message); }
-              else { console.log('Table "ConsumptionLog" is ready.'); }
+            db.run(createRecipeTableQuery, (recipeTableErr: Error | null) => {
+              if (recipeTableErr) { 
+                console.error('Error creating RecipeIngredients table', recipeTableErr.message);
+                return reject(recipeTableErr); // <-- Rechaza la promesa
+              }
+              console.log('Table "RecipeIngredients" is ready.');
 
-              db.close((closeErr: Error | null) => {
-                  if (closeErr) console.error('Error closing database during init:', closeErr.message);
-                  else console.log('Database closed after initialization.');
-              });
-            }); // End Create ConsumptionLog
+              // 4. Create ConsumptionLog Table
+              const createLogTableQuery = `
+                CREATE TABLE IF NOT EXISTS ConsumptionLog (
+                  LogID INTEGER PRIMARY KEY AUTOINCREMENT,
+                  UserID TEXT NOT NULL,
+                  ConsumptionDate TEXT NOT NULL,
+                  MealType TEXT,
+                  FoodID INTEGER NOT NULL,
+                  ReferenceDatabaseID INTEGER NOT NULL,
+                  Grams REAL NOT NULL,
+                  Timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                  FOREIGN KEY (FoodID) REFERENCES Foods(FoodID) ON DELETE CASCADE,
+                  FOREIGN KEY (ReferenceDatabaseID) REFERENCES FoodDatabases(DatabaseID) ON DELETE CASCADE
+                );
+              `;
+              db.run(createLogTableQuery, (logTableErr: Error | null) => {
+                if (logTableErr) { 
+                  console.error('Error creating ConsumptionLog table', logTableErr.message);
+                  return reject(logTableErr); // <-- Rechaza la promesa
+                }
+                console.log('Table "ConsumptionLog" is ready.');
+
+
+
+// 5. Create RDIProfiles Table (v0.5 - Arquitectura Flexible)
+        const createRdiProfilesQuery = `
+          CREATE TABLE IF NOT EXISTS RDIProfiles (
+            ProfileID INTEGER PRIMARY KEY AUTOINCREMENT,
+            ProfileName TEXT NOT NULL UNIQUE,
+            Description TEXT,
+            Source TEXT -- Ej: "Resolución 3803 de 2016 (Colombia)"
+          );
+        `;
+        db.run(createRdiProfilesQuery, (rdiProfErr: Error | null) => {
+           if (rdiProfErr) { console.error('Error creating RDIProfiles table', rdiProfErr.message); return reject(rdiProfErr); }
+           console.log('Table "RDIProfiles" is ready.');
+
+           // 6. Create RDIValues Table (MEJORADA con 'Type')
+           // Type puede ser: 'RDA', 'EAR', 'AI', 'UL', 'AMDR_MIN', 'AMDR_MAX'
+           const createRdiValuesQuery = `
+             CREATE TABLE IF NOT EXISTS RDIValues (
+               ValueID INTEGER PRIMARY KEY AUTOINCREMENT,
+               ProfileID INTEGER NOT NULL,
+               NutrientKey TEXT NOT NULL,
+               RecommendedValue REAL NOT NULL,
+               Type TEXT NOT NULL DEFAULT 'RDA', 
+               FOREIGN KEY (ProfileID) REFERENCES RDIProfiles(ProfileID) ON DELETE CASCADE,
+               UNIQUE(ProfileID, NutrientKey, Type)
+             );
+           `;
+           db.run(createRdiValuesQuery, (rdiValErr: Error | null) => {
+             if (rdiValErr) { console.error('Error creating RDIValues table', rdiValErr.message); return reject(rdiValErr); }
+             console.log('Table "RDIValues" is ready (with Type support).');
+
+             // 7. Insertar Perfil por Defecto: RIEN Colombia - Hombres 19-30 años (Basado en Res. 3803/2016)
+             const defaultProfileName = 'RIEN Colombia (Hombres 19-50a)';
+             db.run(`INSERT OR IGNORE INTO RDIProfiles (ProfileID, ProfileName, Source) VALUES (1, ?, 'Res. 3803 de 2016')`, [defaultProfileName], (insertProfileErr) => {
+                if (!insertProfileErr) {
+                    // Valores reales extraídos de las tablas 9, 14, 15, 20, 21, 22, 23 del documento
+                    const defaultValues = [
+                        // Energía y Macros (AMDR y Referencias generales)
+                        ['Energy_kcal', 2400, 'RDA'], // Referencia genérica
+                        ['Protein_g', 56, 'RDA'], // Tabla 12 (0.92g/kg aprox para 60kg referencia)
+                        ['Carbohydrate_g', 130, 'RDA'], // Tabla 17
+                        ['Fiber_g', 38, 'AI'], // Tabla 18
+
+                        // Minerales (Tabla 22 y 23)
+                        ['Calcium_mg', 1000, 'RDA'], ['Calcium_mg', 2500, 'UL'],
+                        ['Iron_mg', 8, 'RDA'], ['Iron_mg', 45, 'UL'], // Nota: Hombres necesitan menos hierro
+                        ['Sodium_mg', 1500, 'AI'], ['Sodium_mg', 2300, 'UL'],
+                        ['Zinc_mg', 11, 'RDA'], ['Zinc_mg', 40, 'UL'],
+                        ['Magnesium_mg', 400, 'RDA'],
+                        
+                        // Vitaminas (Tabla 20 y 21)
+                        ['VitaminC_mg', 90, 'RDA'], ['VitaminC_mg', 2000, 'UL'],
+                        ['VitaminA_ER', 900, 'RDA'], ['VitaminA_ER', 3000, 'UL'],
+                        ['VitaminB12_mcg', 2.4, 'RDA'],
+                        ['Folate_mcg', 400, 'RDA'], ['Folate_mcg', 1000, 'UL']
+                    ];
+
+                    const stmt = db.prepare(`INSERT OR IGNORE INTO RDIValues (ProfileID, NutrientKey, RecommendedValue, Type) VALUES (1, ?, ?, ?)`);
+                    defaultValues.forEach(val => stmt.run(val));
+                    stmt.finalize();
+                    console.log('Default RIEN Profile initialized.');
+                }
+             });
+
+             // --- CERRAR BD ---
+             db.close((closeErr: Error | null) => {
+                if (closeErr) return reject(closeErr);
+                resolve(); 
+           }); 
+        });
+
+
+
+
+
+
+
+                }); // End Close
+              }); // End Create Log
+            }); // End Create Recipe
           }); // End Create Foods
         }); // End Insert Default
       }); // End Create DBs
     }); // End db.serialize
-  }); // End PRAGMA
+  }); // End Promise
 }
 
 
@@ -245,20 +392,31 @@ function createWindow() {
   mainWindow.webContents.openDevTools();
 }
 
+// En src/main.ts
+
 // --- APP LIFECYCLE ---
-app.whenReady().then(() => {
-  initializeDatabase();
-  createWindow();
+app.whenReady().then(async () => { // <-- AÑADIDO 'async'
+  
+  try {
+    // AÑADIDO 'await': No continuará hasta que la promesa de initializeDatabase() se resuelva
+    await initializeDatabase(); 
+    
+    console.log("--- Database Initialization Complete. Creating Window. ---");
+    
+    // Solo crea la ventana DESPUÉS de que la BD esté lista
+    createWindow(); 
+
+  } catch (error) {
+    console.error("!!! FATAL: Database failed to initialize. App will not start. !!!", error);
+    // Aquí podrías mostrar un diálogo de error al usuario
+    app.quit();
+  }
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
     }
   });
-});
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
 });
 
 // --- IPC EVENT HANDLERS ---
@@ -337,6 +495,49 @@ ipcMain.handle('get-food-details', async (event, foodId: number): Promise<IFoodD
     });
 });
 
+ipcMain.handle('get-recipe-ingredients', async (event, foodId: number): Promise<IRecipeIngredient[]> => {
+  return new Promise((resolve, reject) => {
+    if (!foodId || foodId <= 0) {
+      return reject('Invalid Food ID provided.');
+    }
+
+    const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err: Error | null) => {
+      if (err) return reject(`Database connection error: ${err.message}`);
+    });
+
+    const query = `
+      SELECT
+        ri.IngredientFoodID AS foodId,
+        f.Name AS name,
+        d.DatabaseName AS dbName,
+        ri.IngredientGrams AS grams
+      FROM RecipeIngredients ri
+      JOIN Foods f ON ri.IngredientFoodID = f.FoodID
+      JOIN FoodDatabases d ON f.DatabaseID = d.DatabaseID
+      WHERE ri.ParentFoodID = ?
+      ORDER BY ri.RecipeIngredientID ASC
+    `;
+
+    db.all(query, [foodId], (err: Error | null, rows: any[]) => {
+      db.close();
+      if (err) {
+        return reject(`Error fetching recipe ingredients: ${err.message}`);
+      }
+      
+      // Reformateamos los datos para que coincidan con la interfaz IRecipeIngredient
+      const ingredients: IRecipeIngredient[] = rows.map(row => ({
+        foodId: row.foodId,
+        name: `${row.name} (${row.dbName})`, // Formato: "Arroz (Default)"
+        grams: row.grams
+      }));
+      
+      console.log(`[IPC] Found ${ingredients.length} ingredients for FoodID ${foodId}`);
+      resolve(ingredients);
+    });
+  });
+});
+
+
 ipcMain.handle('get-databases', async (): Promise<IDatabaseInfo[]> => {
     return new Promise((resolve, reject) => {
         const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err: Error | null) => {
@@ -360,6 +561,10 @@ ipcMain.handle('add-database', async (event, dbName: string): Promise<string> =>
         const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, (err: Error | null) => {
             if (err) return reject(`Database connection error: ${err.message}`);
         });
+
+
+
+
         const insertQuery = `INSERT INTO FoodDatabases (DatabaseName) VALUES (?)`;
         db.run(insertQuery, [trimmedName], function (this: sqlite3.RunResult, err: Error | null) {
             db.close((closeErr: Error | null) => {
@@ -413,60 +618,218 @@ ipcMain.handle('delete-database', async (event, databaseId: number): Promise<str
     });
 });
 
+
 ipcMain.handle('update-food-details', async (event, foodData: IFoodDetails): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      if (!foodData || typeof foodData.FoodID !== 'number' || foodData.FoodID <= 0) {
-        return reject('Invalid Food ID provided for update.');
-      }
-      const trimmedName = foodData.Name?.trim();
-      if (!trimmedName) {
-        return reject('Food name cannot be empty.');
-      }
-      const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, (err: Error | null) => {
-        if (err) return reject(`Database connection error: ${err.message}`);
+  return new Promise((resolve, reject) => {
+    // --- Validación Inicial ---
+    if (!foodData || typeof foodData.FoodID !== 'number' || foodData.FoodID <= 0) {
+      return reject('Invalid Food ID provided for update.');
+    }
+    const trimmedName = foodData.Name?.trim();
+    if (!trimmedName) {
+      return reject('Food name cannot be empty.');
+    }
+
+    // --- Conexión a la BD ---
+    const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, (err: Error | null) => {
+      if (err) return reject(`Database connection error: ${err.message}`);
+    });
+
+    // --- Iniciar Transacción ---
+    db.serialize(() => {
+      db.run('BEGIN TRANSACTION;', (beginErr: Error | null) => {
+        if (beginErr) {
+          db.close();
+          return reject(`Failed to start transaction: ${beginErr.message}`);
+        }
       });
-      const fieldsToUpdate: string[] = [ 'Name = ?' ];
-      const values: (string | number | null)[] = [ trimmedName ];
-      const nutrientFields: (keyof IFoodDetails)[] = [
-          'Energy_kcal', 'Water_g', 'Protein_g', 'Fat_g', 'Carbohydrate_g',
-          'SaturatedFat_g', 'MonounsaturatedFat_g', 'PolyunsaturatedFat_g', 'Cholesterol_mg',
-          'Fiber_g', 'Sugar_g', 'Ash_g', 'Calcium_mg', 'Phosphorus_mg', 'Iron_mg', 'Sodium_mg',
-          'Potassium_mg', 'Magnesium_mg', 'Zinc_mg', 'Copper_mg', 'Manganese_mg', 'VitaminA_ER',
-          'Thiamin_mg', 'Riboflavin_mg', 'Niacin_mg', 'PantothenicAcid_mg', 'VitaminB6_mg',
-          'Folate_mcg', 'VitaminB12_mcg', 'VitaminC_mg'
+
+      // --- 1. Calcular el rendimiento (si es receta) ---
+let recipeYield: number | null = null;
+if (foodData.FoodType === 'recipe' && foodData.Ingredients && foodData.Ingredients.length > 0) {
+  recipeYield = foodData.Ingredients.reduce((sum, ing) => sum + ing.grams, 0);
+}
+
+// --- 2. Actualizar la tabla 'Foods' ---
+const fieldsToUpdate: string[] = ['Name = ?', 'FoodType = ?', 'RecipeYieldGrams = ?']; // <-- AÑADIDO RecipeYieldGrams
+const values: (string | number | null)[] = [trimmedName, foodData.FoodType || 'simple', recipeYield]; // <-- AÑADIDO recipeYield
+
+
+
+
+      // Definimos explícitamente sobre qué campos iterar.
+      // 1. Definimos un tipo que es 'keyof IFoodDetails' PERO EXCLUYE las claves que no son nutrientes
+      type NutrientKey = Exclude<keyof IFoodDetails, 'FoodID' | 'DatabaseID' | 'Name' | 'FoodType' | 'Ingredients'>;
+
+      // 2. Ahora 'nutrientFields' usa este tipo más específico
+      const nutrientFields: NutrientKey[] = [
+        'Energy_kcal', 'Water_g', 'Protein_g', 'Fat_g', 'Carbohydrate_g',
+        'SaturatedFat_g', 'MonounsaturatedFat_g', 'PolyunsaturatedFat_g', 'Cholesterol_mg',
+        'Fiber_g', 'Sugar_g', 'Ash_g', 'Calcium_mg', 'Phosphorus_mg', 'Iron_mg',
+        'Sodium_mg', 'Potassium_mg', 'Magnesium_mg', 'Zinc_mg', 'Copper_mg',
+        'Manganese_mg', 'VitaminA_ER', 'Thiamin_mg', 'Riboflavin_mg', 'Niacin_mg',
+        'PantothenicAcid_mg', 'VitaminB6_mg', 'Folate_mcg', 'VitaminB12_mcg', 'VitaminC_mg'
       ];
+
+
       nutrientFields.forEach(field => {
-          if (foodData.hasOwnProperty(field)) {
-              fieldsToUpdate.push(`${field} = ?`);
-              const value = foodData[field];
-              values.push(value === undefined ? null : value);
-          }
+        if (foodData.hasOwnProperty(field)) {
+          fieldsToUpdate.push(`${field} = ?`);
+          const value = foodData[field]; 
+          values.push(value === undefined ? null : value);
+        }
       });
-      values.push(foodData.FoodID);
-      if (fieldsToUpdate.length <= 1) { db.close(); console.warn("update-food-details called with only Name change."); }
+
+      values.push(foodData.FoodID); // Añadir el ID para el 'WHERE'
+
       const updateQuery = `UPDATE Foods SET ${fieldsToUpdate.join(', ')} WHERE FoodID = ?`;
-      console.log("Executing Update Query:", updateQuery);
-      console.log("With Values:", values);
+      
       db.run(updateQuery, values, function(this: sqlite3.RunResult, err: Error | null) {
-        db.close((closeErr: Error | null) => {
-          if (closeErr) console.error('Error closing database (update-food-details):', closeErr.message);
-        });
         if (err) {
           console.error('Error updating food details:', err.message);
-          if (err.message.includes('UNIQUE constraint failed')) {
-              reject(`Failed to update: Another food named "${trimmedName}" might already exist in this database.`);
-          } else {
-              reject(`Error updating food details: ${err.message}`);
+          db.run('ROLLBACK;');
+          db.close();
+          return reject(`Error updating food: ${err.message}`);
+        }
+        if (this.changes === 0) {
+          db.run('ROLLBACK;');
+          db.close();
+          return reject(`Food with ID ${foodData.FoodID} not found for update.`);
+        }
+
+        // --- 2. Borrar ingredientes antiguos ---
+        const deleteQuery = `DELETE FROM RecipeIngredients WHERE ParentFoodID = ?`;
+        db.run(deleteQuery, [foodData.FoodID], (deleteErr: Error | null) => {
+          if (deleteErr) {
+            console.error('Error deleting old ingredients:', deleteErr.message);
+            db.run('ROLLBACK;');
+            db.close();
+            return reject(`Error clearing old ingredients: ${deleteErr.message}`);
           }
-        } else if (this.changes === 0) {
-          reject(`Food with ID ${foodData.FoodID} not found for update.`);
+
+          // --- 3. Insertar nuevos ingredientes ---
+          if (foodData.FoodType === 'recipe' && foodData.Ingredients && foodData.Ingredients.length > 0) {
+            const insertQuery = `INSERT INTO RecipeIngredients (ParentFoodID, IngredientFoodID, IngredientGrams) VALUES (?, ?, ?)`;
+            const stmt = db.prepare(insertQuery);
+            let ingredientsProcessed = 0;
+            
+            foodData.Ingredients.forEach(ing => {
+              stmt.run([foodData.FoodID, ing.foodId, ing.grams], (runErr: Error | null) => {
+                ingredientsProcessed++;
+                if (runErr) {
+                  console.error('Error inserting ingredient:', runErr.message);
+                }
+
+                if (ingredientsProcessed === foodData.Ingredients!.length) {
+                  stmt.finalize((finalizeErr: Error | null) => {
+                    if (finalizeErr) {
+                      db.run('ROLLBACK;');
+                      db.close();
+                      return reject(`Error saving ingredients: ${finalizeErr.message}`);
+                    }
+                    
+                    db.run('COMMIT;', (commitErr: Error | null) => {
+                      db.close();
+                      if (commitErr) {
+                        return reject(`Error committing transaction: ${commitErr.message}`);
+                      }
+                      resolve('Food and recipe details updated successfully');
+                    });
+                  });
+                }
+              });
+            });
+          } else {
+            // No hay ingredientes (es 'simple' o receta vacía)
+            db.run('COMMIT;', (commitErr: Error | null) => {
+              db.close();
+              if (commitErr) {
+                return reject(`Error committing transaction: ${commitErr.message}`);
+              }
+              resolve('Food details updated successfully (no ingredients).');
+            });
+          }
+        }); // Fin Delete
+      }); // Fin Update Foods
+    }); // Fin db.serialize
+  }); // Fin Promise
+});
+
+
+
+
+
+
+
+
+
+//El main handle para purgar las bases de datos
+ipcMain.handle('purge-food-library', async (event, databaseId: number): Promise<string> => {
+  // ...
+  return new Promise((resolve, reject) => {
+    if (!databaseId || databaseId <= 0) {
+      // ...
+      return reject('Invalid Database ID provided.');
+    }
+    
+    /* <-- ASEGÚRATE DE QUE ESTO SIGUE COMENTADO
+    // Protección eliminada por solicitud del usuario (para poder limpiar la DB "Default")
+    if (databaseId === 1) { 
+      console.log('[IPC] Debug: Rejecting. Attempt to purge "Default" DB.'); 
+      return reject('Cannot purge the "Default" database. You can only delete individual items from it.');
+    }
+    */
+
+    // Añadimos un log para saber si estamos purgando la DB "Default"
+    if (databaseId === 1) {
+      console.warn('[IPC] Debug: ¡ATENCIÓN! Purgando la base de datos "Default".');
+    }
+
+    const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, (err: Error | null) => {
+      if (err) {
+        console.error('[IPC] Debug: DB connection error.', err.message); // <-- LOG D (ERROR)
+        return reject(`Database connection error: ${err.message}`);
+      }
+      console.log('[IPC] Debug: Database connected.'); // <-- LOG E
+    });
+
+    db.run('PRAGMA foreign_keys = ON;', (pragmaErr: Error | null) => {
+      if (pragmaErr) {
+        console.error('[IPC] Debug: Failed to enable foreign keys.', pragmaErr.message); // <-- LOG F (ERROR)
+        db.close();
+        return reject(`Failed to enable foreign keys: ${pragmaErr.message}`);
+      }
+      
+      const deleteQuery = `DELETE FROM Foods WHERE DatabaseID = ?`;
+      console.log(`[IPC] Debug: Attempting to run query: ${deleteQuery} with ID ${databaseId}`); // <-- LOG G
+
+      db.run(deleteQuery, [databaseId], function (this: sqlite3.RunResult, err: Error | null) {
+        if (err) {
+          console.error('[IPC] Debug: SQL query failed.', err.message); // <-- LOG H (ERROR)
+          db.close();
+          reject(`Error purging library: ${err.message}`);
+          return;
+        }
+
+        console.log(`[IPC] Debug: SQL query successful. Changes: ${this.changes}`); // <-- LOG I
+
+        db.close((closeErr: Error | null) => {
+          if (closeErr) console.error('[IPC] Debug: Error closing DB after query:', closeErr.message);
+        });
+
+        if (this.changes === 0) {
+          console.log('[IPC] Debug: Query ran but found 0 rows to delete.'); // <-- LOG J
+          resolve('No foods found in that library to delete.');
         } else {
-          console.log(`Food details updated successfully for FoodID: ${foodData.FoodID}`);
-          resolve('Food details updated successfully');
+          console.log(`[IPC] Debug: Successfully purged ${this.changes} food(s).`); // <-- LOG K
+          resolve(`Successfully purged ${this.changes} food entries from the database.`);
         }
       });
     });
+  });
 });
+
+
 
 
 ipcMain.handle('delete-food', async (event, foodId: number): Promise<string> => {
@@ -734,16 +1097,81 @@ ipcMain.handle('import-csv', async (event, databaseId: number): Promise<string> 
 // --- Consumption Log Handlers ---
 
 ipcMain.handle('search-foods', async (event, searchTerm: string, referenceDbId: number): Promise<ISearchFoodResult[]> => {
-     return new Promise((resolve, reject) => {
-        const trimmedSearch = searchTerm?.trim();
-        if (!trimmedSearch || !referenceDbId || referenceDbId <= 0) { return resolve([]); }
-        const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err: Error | null) => { if (err) return reject(`Database connection error: ${err.message}`); });
-        const searchQuery = ` SELECT FoodID, Name FROM Foods WHERE DatabaseID = ? AND Name LIKE ? ORDER BY Name ASC LIMIT 20 `;
-        const searchPattern = `%${trimmedSearch}%`;
-        db.all(searchQuery, [referenceDbId, searchPattern], (err: Error | null, rows: ISearchFoodResult[]) => {
-            db.close((closeErr: Error | null) => { if (closeErr) console.error('Error closing database (search-foods):', closeErr.message); if (err) reject(`Error searching foods: ${err.message}`); else resolve(rows); });
+  return new Promise((resolve, reject) => {
+    const trimmedSearch = searchTerm?.trim();
+    if (!trimmedSearch || !referenceDbId || referenceDbId <= 0) { return resolve([]); }
+    
+    const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err: Error | null) => { 
+      if (err) return reject(`Database connection error: ${err.message}`); 
+    });
+    
+    // *** ESTA ES LA CONSULTA CORREGIDA ***
+    // (Selecciona las columnas que faltaban: FoodType y RecipeYieldGrams)
+    const searchQuery = ` 
+      SELECT FoodID, Name, FoodType, RecipeYieldGrams 
+      FROM Foods 
+      WHERE DatabaseID = ? AND Name LIKE ? 
+      ORDER BY Name ASC 
+      LIMIT 20 
+    `;
+    
+    const searchPattern = `%${trimmedSearch}%`;
+    
+    // El callback no necesita cambiar, 'rows' ahora tendrá las nuevas propiedades
+    db.all(searchQuery, [referenceDbId, searchPattern], (err: Error | null, rows: ISearchFoodResult[]) => {
+        db.close((closeErr: Error | null) => { 
+          if (closeErr) console.error('Error closing database (search-foods):', closeErr.message); 
+          if (err) reject(`Error searching foods: ${err.message}`); 
+          
+          // 'rows' ahora incluirá las nuevas columnas (FoodType, RecipeYieldGrams)
+          else resolve(rows); 
         });
     });
+  });
+});
+
+ipcMain.handle('search-all-foods', async (event, searchTerm: string): Promise<ISearchFoodResult[]> => {
+  return new Promise((resolve, reject) => {
+    const trimmedSearch = searchTerm?.trim();
+    if (!trimmedSearch) {
+      return resolve([]);
+    }
+
+    const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err: Error | null) => {
+      if (err) return reject(`Database connection error: ${err.message}`);
+    });
+
+    // *** CONSULTA MODIFICADA: Añadimos f.FoodType y f.RecipeYieldGrams ***
+    const searchQuery = `
+      SELECT f.FoodID, f.Name, d.DatabaseName, f.FoodType, f.RecipeYieldGrams
+      FROM Foods f
+      JOIN FoodDatabases d ON f.DatabaseID = d.DatabaseID
+      WHERE f.Name LIKE ?
+      ORDER BY f.Name ASC
+      LIMIT 20
+    `;
+    
+    const searchPattern = `%${trimmedSearch}%`;
+
+    db.all(searchQuery, [searchPattern], (err: Error | null, rows: any[]) => {
+      db.close((closeErr: Error | null) => {
+        if (closeErr) console.error('Error closing database (search-all-foods):', closeErr.message);
+      });
+
+      if (err) {
+        reject(`Error searching all foods: ${err.message}`);
+      } else {
+        // *** MAPEO MODIFICADO: Añadimos las nuevas propiedades al objeto de retorno ***
+        const formattedRows: ISearchFoodResult[] = rows.map(row => ({
+          FoodID: row.FoodID,
+          Name: `${row.Name} (${row.DatabaseName})`,
+          FoodType: row.FoodType, // <-- Añadido
+          RecipeYieldGrams: row.RecipeYieldGrams // <-- Añadido
+        }));
+        resolve(formattedRows);
+      }
+    });
+  });
 });
 
 ipcMain.handle('add-log-entry', async (event, logData: INewLogEntryData): Promise<string> => {
@@ -803,6 +1231,74 @@ ipcMain.handle('delete-log-entry', async (event, logId: number): Promise<string>
         });
     });
 });
+
+ipcMain.handle('delete-all-logs', async (): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, (err: Error | null) => {
+      if (err) return reject(`Database connection error: ${err.message}`);
+    });
+
+    const deleteQuery = `DELETE FROM ConsumptionLog`;
+    console.log(`Attempting to delete ALL logs from ConsumptionLog table...`);
+
+    db.run(deleteQuery, [], function (this: sqlite3.RunResult, err: Error | null) {
+      db.close((closeErr: Error | null) => {
+        if (closeErr) console.error('Error closing database (delete-all-logs):', closeErr.message);
+      });
+
+      if (err) {
+        console.error('Error deleting all logs:', err.message);
+        reject(`Error deleting all logs: ${err.message}`);
+      } else {
+        resolve(`Successfully deleted all ${this.changes} log entries from the table.`);
+      }
+    });
+  });
+});
+
+
+ipcMain.handle('get-all-logs', async (): Promise<ILogEntry[]> => {
+  return new Promise((resolve, reject) => {
+    const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err: Error | null) => { 
+      if (err) return reject(`DB connection error: ${err.message}`); 
+    });
+
+    const selectQuery = `
+      SELECT cl.*, f.Name AS FoodName, fd.DatabaseName AS ReferenceDatabaseName 
+      FROM ConsumptionLog cl 
+      JOIN Foods f ON cl.FoodID = f.FoodID 
+      JOIN FoodDatabases fd ON cl.ReferenceDatabaseID = fd.DatabaseID 
+      ORDER BY cl.ConsumptionDate DESC, cl.Timestamp DESC
+    `; // Ordenamos por más reciente primero
+
+    db.all(selectQuery, [], (err: Error | null, rows: ILogEntry[]) => {
+      db.close((closeErr: Error | null) => {
+        if (closeErr) console.error('Error closing DB (get-all-logs):', closeErr.message);
+      });
+      if (err) {
+        reject(`Error fetching all logs: ${err.message}`);
+      } else {
+        // Limpiar MealType (igual que en get-log-entries)
+        const cleanedRows = rows.map(row => ({ ...row, MealType: row.MealType === null ? undefined : row.MealType }));
+        resolve(cleanedRows);
+      }
+    });
+  });
+});
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 ipcMain.handle('edit-log-entry', async (
     event,
@@ -1159,76 +1655,141 @@ ipcMain.handle('get-unique-user-ids', async (): Promise<string[]> => {
 });
 
 
-// --- Calculation Handler (Module 3 - v0.2) ---
-ipcMain.handle('calculate-intake', async (
-    event,
-    userId: string,
-    startDate: string,
-    endDate: string,
-    referenceDbId: number
-): Promise<INutrientTotals> => {
-    console.log(`Calculating intake for User: ${userId}, Dates: ${startDate} to ${endDate}, RefDB: ${referenceDbId}`);
-    return new Promise((resolve, reject) => {
-        const trimmedUserId = userId?.trim();
-        if (!trimmedUserId) return reject('UserID is required.');
-        if (!startDate || !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) return reject('Valid Start Date (YYYY-MM-DD) required.');
-        if (!endDate || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) return reject('Valid End Date (YYYY-MM-DD) required.');
-        if (startDate > endDate) return reject('Start Date cannot be after End Date.');
-        if (typeof referenceDbId !== 'number' || referenceDbId <= 0) return reject('Valid Reference DB ID required.');
-        const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err: Error | null) => {
-            if (err) return reject(`Database connection error: ${err.message}`);
-        });
-        
-        const selectLogQuery = ` SELECT LogID, FoodID, Grams FROM ConsumptionLog WHERE UserID = ? AND ConsumptionDate BETWEEN ? AND ? AND ReferenceDatabaseID = ? `;
-        
-        db.all(selectLogQuery, [trimmedUserId, startDate, endDate, referenceDbId], (logErr: Error | null, logEntries: { LogID: number, FoodID: number, Grams: number }[]) => {
-            if (logErr) { db.close(); return reject(`Error fetching log entries: ${logErr.message}`); }
-            const nutrientColumns = [
-                'Energy_kcal', 'Water_g', 'Protein_g', 'Fat_g', 'Carbohydrate_g',
-                'SaturatedFat_g', 'MonounsaturatedFat_g', 'PolyunsaturatedFat_g', 'Cholesterol_mg',
-                'Fiber_g', 'Sugar_g', 'Ash_g',
-                'Calcium_mg', 'Phosphorus_mg', 'Iron_mg', 'Sodium_mg', 'Potassium_mg',
-                'Magnesium_mg', 'Zinc_mg', 'Copper_mg', 'Manganese_mg',
-                'VitaminA_ER', 'Thiamin_mg', 'Riboflavin_mg', 'Niacin_mg',
-                'PantothenicAcid_mg', 'VitaminB6_mg', 'Folate_mcg', 'VitaminB12_mcg', 'VitaminC_mg'
-            ];
-            const zeroTotals: INutrientTotals = {} as INutrientTotals;
-            nutrientColumns.forEach(col => { zeroTotals[`total${col}`] = 0; });
-            if (logEntries.length === 0) {
-                db.close(); console.log("No log entries found, returning zero totals."); return resolve(zeroTotals);
-            }
-            const selectFoodQuery = ` SELECT FoodID, ${nutrientColumns.join(', ')} FROM Foods WHERE FoodID = ? AND DatabaseID = ? `;
-            const totals: INutrientTotals = { ...zeroTotals };
-            let processedEntries = 0;
-            const errors: string[] = [];
-            logEntries.forEach(entry => {
-                db.get(selectFoodQuery, [entry.FoodID, referenceDbId], (foodErr: Error | null, foodDetails: any) => {
-                    processedEntries++;
-                    if (foodErr) { errors.push(`Error fetching FoodID ${entry.FoodID}: ${foodErr.message}`); }
-                    else if (!foodDetails) { errors.push(`Details not found for FoodID ${entry.FoodID} in DB ${referenceDbId} (LogID: ${entry.LogID}).`); }
-                    else {
-                        const factor = entry.Grams / 100.0;
-                        nutrientColumns.forEach(colName => {
-                            const nutrientValue = foodDetails[colName];
-                            if (typeof nutrientValue === 'number' && !isNaN(nutrientValue)) {
-                                const totalKey = `total${colName}`;
-                                totals[totalKey] = (totals[totalKey] || 0) + (nutrientValue * factor);
-                            }
-                        });
-                    }
-                    if (processedEntries === logEntries.length) {
-                        db.close((closeErr: Error | null) => {
-                            if (closeErr) console.error("Error closing DB after calculation:", closeErr.message);
-                            if (errors.length > 0) { console.warn(`Calculation finished with ${errors.length} errors. First error: ${errors[0]}`); }
-                            console.log("Calculation successful. Totals:", totals);
-                            resolve(totals);
-                        });
-                    }
-                }); // End db.get
-            }); // End forEach
-        }); // End db.all
-    }); // End Promise
-}); // End ipcMain.handle 'calculate-intake'
+
+
+const nutrientColumnNames: string[] = [
+  'Energy_kcal', 'Water_g', 'Protein_g', 'Fat_g', 'Carbohydrate_g',
+  'SaturatedFat_g', 'MonounsaturatedFat_g', 'PolyunsaturatedFat_g', 'Cholesterol_mg',
+  'Fiber_g', 'Sugar_g', 'Ash_g',
+  'Calcium_mg', 'Phosphorus_mg', 'Iron_mg', 'Sodium_mg', 'Potassium_mg',
+  'Magnesium_mg', 'Zinc_mg', 'Copper_mg', 'Manganese_mg',
+  'VitaminA_ER', 'Thiamin_mg', 'Riboflavin_mg', 'Niacin_mg', // <-- CORREGIDO
+  'PantothenicAcid_mg', 'VitaminB6_mg', 'Folate_mcg', 'VitaminB12_mcg', 'VitaminC_mg'
+];
+
+// Creamos un array de llaves con el prefijo 'total' para la interfaz INutrientTotals
+const nutrientTotalKeys: (keyof INutrientTotals)[] = nutrientColumnNames.map(col => `total${col}`) as (keyof INutrientTotals)[];
+// --- FUNCIÓN AUXILIAR RECURSIVA ---
+// Esta es la nueva lógica de "explosión" [cite: 412-413]
+async function getNutrientsForFoodRecursive(
+  foodId: number,
+  gramsConsumed: number,
+  referenceDbId: number,
+  db: Database,
+  depth: number = 0
+): Promise<INutrientTotals> {
+
+  // 1. Inicializar totales en cero
+  const totals: INutrientTotals = {} as INutrientTotals;
+  nutrientTotalKeys.forEach(key => { totals[key] = 0; });
+
+  if (depth > 10) {
+    console.error(`[Calc] Recursion limit reached for FoodID ${foodId}. Aborting to prevent infinite loop.`);
+    return totals; // Evitar bucles infinitos
+  }
+
+  // 2. Obtener los detalles del alimento (tipo, rendimiento, nutrientes)
+  const foodDetails = await new Promise<any>((resolve, reject) => {
+    // Seleccionamos las columnas de nutrientes que definimos arriba
+    db.get(
+      `SELECT FoodID, FoodType, RecipeYieldGrams, ${nutrientColumnNames.join(', ')} FROM Foods WHERE FoodID = ? AND DatabaseID = ?`,
+      [foodId, referenceDbId],
+      (err, row) => (err ? reject(err) : resolve(row))
+    );
+  });
+
+  if (!foodDetails) {
+    console.warn(`[Calc] FoodID ${foodId} not found in DB ${referenceDbId}. Returning zero.`);
+    return totals;
+  }
+
+  // 3. Decidir la lógica: Simple o Receta
+  if (foodDetails.FoodType === 'simple') {
+    // --- LÓGICA SIMPLE ---
+    const factor = gramsConsumed / 100.0;
+    nutrientColumnNames.forEach((colName, index) => {
+      const nutrientValue = foodDetails[colName];
+      if (typeof nutrientValue === 'number' && !isNaN(nutrientValue)) {
+        const totalKey = nutrientTotalKeys[index]; // ej: 'totalEnergy_kcal'
+        totals[totalKey] += nutrientValue * factor;
+      }
+    });
+
+  } else {
+    // --- LÓGICA DE RECETA (RECURSIVA) ---
+    const yieldGrams = foodDetails.RecipeYieldGrams;
+    if (!yieldGrams || yieldGrams <= 0) {
+      console.warn(`[Calc] Recipe FoodID ${foodId} has no yield (RecipeYieldGrams is ${yieldGrams}). Returning zero.`);
+      return totals;
+    }
+
+    // Calcular el factor de escala [cite: 413]
+    const scaleFactor = gramsConsumed / yieldGrams;
+
+    // Obtener los ingredientes de esta receta
+    const ingredients = await new Promise<any[]>((resolve, reject) => {
+      db.all(
+        `SELECT IngredientFoodID, IngredientGrams FROM RecipeIngredients WHERE ParentFoodID = ?`,
+        [foodId],
+        (err, rows) => (err ? reject(err) : resolve(rows))
+      );
+    });
+
+    // Calcular recursivamente los nutrientes para cada ingrediente
+    for (const ingredient of ingredients) {
+      // Ajustar los gramos del ingrediente por el factor de escala
+      const ingredientGrams = ingredient.IngredientGrams * scaleFactor;
+      
+      // ¡Llamada recursiva! [cite: 413]
+      const ingredientNutrients = await getNutrientsForFoodRecursive(
+        ingredient.IngredientFoodID,
+        ingredientGrams,
+        referenceDbId, // Asumimos que los ingredientes usan la misma DB de referencia
+        db,
+        depth + 1
+      );
+
+      // Sumar los nutrientes del ingrediente a los totales
+      nutrientTotalKeys.forEach(key => {
+        totals[key] += ingredientNutrients[key];
+      });
+    }
+  }
+
+  return totals;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 ipcMain.handle('export-report', async (
@@ -1307,70 +1868,89 @@ ipcMain.handle('export-report', async (
 // --- NUEVOS Manejadores de Análisis (v0.3) ---
 
 // (Función auxiliar 'getBaseAnalyticsData'...)
+
+// (Función auxiliar 'getBaseAnalyticsData'...)
 async function getBaseAnalyticsData(
-    userIds: string[], 
-    startDate: string, 
-    endDate: string, 
-    referenceDbId: number, 
-    nutrient: string // El nombre de la columna, ej: "Energy_kcal"
+  userIds: string[],
+  startDate: string,
+  endDate: string,
+  referenceDbId: number,
+  nutrient: string // El nombre de la columna, ej: "Energy_kcal"
 ): Promise<{ [userId: string]: { [date: string]: number } }> {
-    return new Promise((resolve, reject) => {
-        // Validar el nombre del nutriente para evitar Inyección SQL
-        const allowedNutrients = [
-            'Energy_kcal', 'Water_g', 'Protein_g', 'Fat_g', 'Carbohydrate_g',
-            'SaturatedFat_g', 'MonounsaturatedFat_g', 'PolyunsaturatedFat_g', 'Cholesterol_mg',
-            'Fiber_g', 'Sugar_g', 'Ash_g', 'Calcium_mg', 'Phosphorus_mg', 'Iron_mg', 'Sodium_mg',
-            'Potassium_mg', 'Magnesium_mg', 'Zinc_mg', 'Copper_mg', 'Manganese_mg',
-            'VitaminA_ER', 'Thiamin_mg', 'Riboflavin_mg', 'Niacin_mg',
-            'PantothenicAcid_mg', 'VitaminB6_mg', 'Folate_mcg', 'VitaminB12_mcg', 'VitaminC_mg'
-        ];
-        if (!allowedNutrients.includes(nutrient)) {
-            return reject(new Error(`Invalid nutrient column name: ${nutrient}`));
-        }
-        
-        const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err: Error | null) => {
-            if (err) return reject(`Database connection error: ${err.message}`);
-        });
-
-        // Crear placeholders (?) para el array de UserIDs
-        const placeholders = userIds.map(() => '?').join(',');
-
-        // Consulta que calcula el total de un nutriente, por usuario, por día
-        const query = `
-            SELECT 
-                cl.UserID, 
-                cl.ConsumptionDate, 
-                SUM(f.${nutrient} * (cl.Grams / 100.0)) AS DailyTotal
-            FROM ConsumptionLog cl
-            JOIN Foods f ON cl.FoodID = f.FoodID
-            WHERE 
-                cl.UserID IN (${placeholders})
-                AND cl.ConsumptionDate BETWEEN ? AND ?
-                AND cl.ReferenceDatabaseID = ?
-                AND f.${nutrient} IS NOT NULL
-            GROUP BY cl.UserID, cl.ConsumptionDate
-        `;
-
-        const params = [...userIds, startDate, endDate, referenceDbId];
-
-        db.all(query, params, (err: Error | null, rows: { UserID: string, ConsumptionDate: string, DailyTotal: number }[]) => {
-            db.close();
-            if (err) {
-                return reject(new Error(`Failed to execute analytics query: ${err.message}`));
-            }
-            
-            // Re-estructurar los datos en un mapa para fácil acceso: { UserA: { '2025-10-29': 1500, ... }, ... }
-            const results: { [userId: string]: { [date: string]: number } } = {};
-            for (const row of rows) {
-                if (!results[row.UserID]) {
-                    results[row.UserID] = {};
-                }
-                results[row.UserID][row.ConsumptionDate] = row.DailyTotal;
-            }
-            resolve(results);
-        });
+ 
+    // 1. Conectar a la BD
+    const db: Database = await new Promise((resolve, reject) => {
+      const dbInstance = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err: Error | null) => {
+        if (err) reject(`Database connection error: ${err.message}`);
+        else resolve(dbInstance);
+      });
     });
+
+    // 2. Validar el nutriente
+    const allowedNutrients = nutrientColumnNames;
+    if (!allowedNutrients.includes(nutrient)) {
+        db.close();
+    return Promise.reject(new Error(`Invalid nutrient column name: ${nutrient}`));
+  }
+    // Convertir ej: "Energy_kcal" a "totalEnergy_kcal"
+    const nutrientTotalKey = `total${nutrient}` as keyof INutrientTotals;
+
+    // 3. Crear placeholders (?) para el array de UserIDs
+  const placeholders = userIds.map(() => '?').join(',');
+
+    try {
+      // 4. Obtener los logs CRUDOS (sin calcular)
+      const query = `
+        SELECT cl.UserID, cl.ConsumptionDate, cl.FoodID, cl.Grams
+        FROM ConsumptionLog cl
+        WHERE 
+            cl.UserID IN (${placeholders})
+            AND cl.ConsumptionDate BETWEEN ? AND ?
+            AND cl.ReferenceDatabaseID = ?
+      `;
+      const params = [...userIds, startDate, endDate, referenceDbId];
+      
+      const logEntries: any[] = await new Promise((resolve, reject) => {
+        db.all(query, params, (err, rows) => err ? reject(err) : resolve(rows));
+      });
+
+      // 5. Mapa de resultados: { UserA: { '2025-10-29': 0, ... }, ... }
+      const results: { [userId: string]: { [date: string]: number } } = {};
+      userIds.forEach(id => { results[id] = {}; });
+
+      // 6. Procesar cada log recursivamente
+      for (const entry of logEntries) {
+        const nutrients = await getNutrientsForFoodRecursive(
+          entry.FoodID,
+          entry.Grams,
+          referenceDbId,
+          db
+        );
+        
+        const nutrientValue = nutrients[nutrientTotalKey];
+
+        // Inicializar la fecha si no existe
+        if (!results[entry.UserID][entry.ConsumptionDate]) {
+          results[entry.UserID][entry.ConsumptionDate] = 0;
+        }
+        // Acumular el valor para ese día/usuario
+        results[entry.UserID][entry.ConsumptionDate] += nutrientValue;
+      }
+
+      db.close();
+      return results;
+
+    } catch (error) {
+      if(db) db.close();
+      throw error;
+    }
 }
+
+
+
+
+
+
 
 // 1. ANÁLISIS EPIDEMIOLÓGICO (ESTADÍSTICAS DE GRUPO)
 ipcMain.handle('get-statistical-report', async (
@@ -1382,185 +1962,263 @@ ipcMain.handle('get-statistical-report', async (
     nutrient: string
 ): Promise<IStatisticalReport> => {
     
-    // 1. Obtener los datos base (totales por día por usuario)
+  // 1. Obtener los datos base (totales por día por usuario)
+  const dailyDataByUser = await getBaseAnalyticsData(userIds, startDate, endDate, referenceDbId, nutrient);
+
+  // 2. Calcular el promedio *diario* para CADA usuario (para las estadísticas)
+  const userAverages: number[] = [];
+  // 3. Recolectar los datos diarios CRUDOS (para el Box Plot)
+  const rawDailyData: number[] = []; 
+
+  for (const userId of Object.keys(dailyDataByUser)) {
+      const dailyTotals = Object.values(dailyDataByUser[userId]); // e.g., [120, 180, 240, 186]
+      if (dailyTotals.length > 0) {
+          
+          // Para las estadísticas (Q1, Media, etc.) usamos el PROMEDIO del usuario
+          const userTotal = dailyTotals.reduce((sum, val) => sum + val, 0);
+          userAverages.push(userTotal / dailyTotals.length); // e.g., 181.5
+          
+          // Para el Box Plot (rawData) usamos TODOS los puntos diarios
+          rawDailyData.push(...dailyTotals); // e.g., 120, 180, 240, 186
+      }
+  }
+
+  if (userAverages.length === 0) {
+      throw new Error("No data found for the selected criteria to calculate statistics.");
+  }
+
+  // 4. Calcular estadísticas sobre la lista de PROMEDIOS DE USUARIO (N=2 en tu prueba)
+  // Esto es lo que quiere el "Get Group Statistics" [cite: 317, 320]
+  const report: IStatisticalReport = {
+      count: userAverages.length,
+      mean: ss.mean(userAverages),
+      median: ss.median(userAverages),
+      stdDev: ss.standardDeviation(userAverages),
+      variance: ss.variance(userAverages),
+      min: ss.min(userAverages),
+      max: ss.max(userAverages),
+      q1: ss.quantile(userAverages, 0.25),
+      q3: ss.quantile(userAverages, 0.75),
+      
+      // 5. Devolver los DATOS DIARIOS CRUDOS (N=8 en tu prueba)
+      // Esto es lo que quiere el Box Plot [cite: 337]
+      // (Si solo se pidió 1 usuario, esto devolverá solo los datos de ese usuario)
+      rawData: rawDailyData 
+  };
+
+  console.log("Generated Statistical Report:", report);
+  return report;
+});
+
+
+// 2. ANÁLISIS NUTRICIONAL (GRÁFICO DE LÍNEA) - AHORA SOPORTA MÚLTIPLES USUARIOS
+ipcMain.handle('get-daily-intake-over-time', async (
+    event,
+    userIds: string[], // <-- Acepta múltiples UserIDs
+    startDate: string,
+    endDate: string,
+    referenceDbId: number,
+    nutrient: string
+): Promise<IDailyIntake[][]> => { // <-- Devuelve un Array de Arrays
+
+    // 1. Obtener los datos base. Usamos la función auxiliar que ya creamos.
+    // Esta función devuelve los totales diarios de nutrientes agrupados por UserID.
     const dailyDataByUser = await getBaseAnalyticsData(userIds, startDate, endDate, referenceDbId, nutrient);
     
-    // 2. Calcular el promedio *diario* para cada usuario
-    const userAverages: number[] = [];
-    for (const userId of Object.keys(dailyDataByUser)) {
-        const dates = Object.keys(dailyDataByUser[userId]);
-        if (dates.length > 0) {
-            const totalsPerDay = Object.values(dailyDataByUser[userId]);
-            const userTotal = totalsPerDay.reduce((sum, val) => sum + val, 0);
-            userAverages.push(userTotal / dates.length); // Promedio diario de este usuario
+    // 2. Convertir el mapa de datos a un array de series, una para cada usuario
+    const results: IDailyIntake[][] = [];
+    
+    for (const userId of userIds) {
+        const userDataMap = dailyDataByUser[userId];
+        
+        if (userDataMap) {
+            const userDailyIntake: IDailyIntake[] = Object.keys(userDataMap).map(date => {
+                return {
+                    date: date,
+                    value: userDataMap[date],
+                    userId: userId // Añadimos el userId para usarlo en el frontend (aunque no está en el tipo, es útil)
+                };
+            });
+            
+            // 3. Ordenar por fecha
+            userDailyIntake.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+            
+            if (userDailyIntake.length > 0) {
+                results.push(userDailyIntake);
+            }
         }
     }
 
-    if (userAverages.length === 0) {
-        throw new Error("No data found for the selected criteria to calculate statistics.");
-    }
-
-    // 3. Calcular estadísticas sobre la lista de promedios de usuario
-    const report: IStatisticalReport = {
-        count: userAverages.length,
-        mean: ss.mean(userAverages),
-        median: ss.median(userAverages),
-        stdDev: ss.standardDeviation(userAverages),
-        variance: ss.variance(userAverages),
-        min: ss.min(userAverages),
-        max: ss.max(userAverages),
-        q1: ss.quantile(userAverages, 0.25),
-        q3: ss.quantile(userAverages, 0.75),
-        rawData: userAverages // Enviar los promedios de cada usuario para el histograma/box plot
-    };
-
-    console.log("Generated Statistical Report:", report);
-    return report;
+    console.log("Generated Multi-Series Daily Intake Over Time:", results);
+    return results; // Array de arrays, donde cada array interior es una línea de usuario
 });
 
-// 2. ANÁLISIS NUTRICIONAL (GRÁFICO DE LÍNEA)
-ipcMain.handle('get-daily-intake-over-time', async (
-    event,
-    userId: string, 
-    startDate: string, 
-    endDate: string, 
-    referenceDbId: number, 
-    nutrient: string
-): Promise<IDailyIntake[]> => {
 
-    // 1. Obtener los datos base. Nota: getBaseAnalyticsData espera un array de UserIDs.
-    const dailyDataByUser = await getBaseAnalyticsData([userId], startDate, endDate, referenceDbId, nutrient);
 
-    const userData = dailyDataByUser[userId];
-    if (!userData) {
-        return []; // Sin datos para este usuario
-    }
 
-    // 2. Convertir el mapa de datos a un array de {date, value}
-    const results: IDailyIntake[] = Object.keys(userData).map(date => {
-        return {
-            date: date,
-            value: userData[date]
-        };
-    });
 
-    // 3. Ordenar por fecha
-    results.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
-    console.log("Generated Daily Intake Over Time:", results);
-    return results;
-});
+
+
+
+
 
 // 3. ANÁLISIS NUTRICIONAL (GRÁFICO DE PASTEL - ALIMENTOS)
+
 ipcMain.handle('get-nutrient-contribution', async (
-    event,
-    userId: string, 
-    startDate: string, 
-    endDate: string, 
-    referenceDbId: number, 
-    nutrient: string
+  event,
+  userId: string,
+  startDate: string,
+  endDate: string,
+  referenceDbId: number,
+  nutrient: string
 ): Promise<IContributionReport[]> => {
-    
-    // Validar el nombre del nutriente para evitar Inyección SQL
-    const allowedNutrients = [
-        'Energy_kcal', 'Water_g', 'Protein_g', 'Fat_g', 'Carbohydrate_g',
-        'SaturatedFat_g', 'MonounsaturatedFat_g', 'PolyunsaturatedFat_g', 'Cholesterol_mg',
-        'Fiber_g', 'Sugar_g', 'Ash_g', 'Calcium_mg', 'Phosphorus_mg', 'Iron_mg', 'Sodium_mg',
-        'Potassium_mg', 'Magnesium_mg', 'Zinc_mg', 'Copper_mg', 'Manganese_mg',
-        'VitaminA_ER', 'Thiamin_mg', 'Riboflavin_mg', 'Niacin_mg',
-        'PantothenicAcid_mg', 'VitaminB6_mg', 'Folate_mcg', 'VitaminB12_mcg', 'VitaminC_mg'
-    ];
-    if (!allowedNutrients.includes(nutrient)) {
-        return Promise.reject(new Error(`Invalid nutrient column name: ${nutrient}`));
-    }
 
-    return new Promise((resolve, reject) => {
-        const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err: Error | null) => {
-            if (err) return reject(`Database connection error: ${err.message}`);
-        });
+    // 1. Validar nutriente
+    const allowedNutrients = nutrientColumnNames;
+  if (!allowedNutrients.includes(nutrient)) {
+    return Promise.reject(new Error(`Invalid nutrient column name: ${nutrient}`));
+  }
+    const nutrientTotalKey = `total${nutrient}` as keyof INutrientTotals;
 
-        // Consulta que agrupa por nombre de alimento y suma el nutriente
-        const query = `
-            SELECT 
-                f.Name AS name, 
-                SUM(f.${nutrient} * (cl.Grams / 100.0)) AS value
-            FROM ConsumptionLog cl
-            JOIN Foods f ON cl.FoodID = f.FoodID
-            WHERE 
-                cl.UserID = ?
-                AND cl.ConsumptionDate BETWEEN ? AND ?
-                AND cl.ReferenceDatabaseID = ?
-                AND f.${nutrient} IS NOT NULL
-            GROUP BY f.Name
-            ORDER BY value DESC
-        `;
-
-        db.all(query, [userId, startDate, endDate, referenceDbId], (err: Error | null, rows: IContributionReport[]) => {
-            db.close();
-            if (err) {
-                return reject(new Error(`Failed to get nutrient contribution: ${err.message}`));
-            }
-            // Devolver solo valores positivos
-            resolve(rows.filter(r => r.value > 0));
-        });
+    // 2. Conectar a BD
+    const db: Database = await new Promise((resolve, reject) => {
+      const dbInstance = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err: Error | null) => {
+        if (err) reject(`Database connection error: ${err.message}`);
+        else resolve(dbInstance);
+      });
     });
+
+    try {
+      // 3. Obtener logs CRUDOS (con nombre de alimento)
+      const query = `
+        SELECT cl.FoodID, cl.Grams, f.Name AS FoodName
+        FROM ConsumptionLog cl
+        JOIN Foods f ON cl.FoodID = f.FoodID
+        WHERE 
+            cl.UserID = ?
+            AND cl.ConsumptionDate BETWEEN ? AND ?
+            AND cl.ReferenceDatabaseID = ?
+      `;
+      
+      const logEntries: any[] = await new Promise((resolve, reject) => {
+        db.all(query, [userId, startDate, endDate, referenceDbId], (err, rows) => err ? reject(err) : resolve(rows));
+      });
+
+      // 4. Mapa de resultados: { "Manzana": 0, "Pollo": 0 }
+      const contributionMap = new Map<string, number>();
+
+      // 5. Procesar cada log recursivamente
+      for (const entry of logEntries) {
+        const nutrients = await getNutrientsForFoodRecursive(
+          entry.FoodID,
+          entry.Grams,
+          referenceDbId,
+          db
+        );
+
+        const nutrientValue = nutrients[nutrientTotalKey];
+        const currentTotal = contributionMap.get(entry.FoodName) || 0;
+        contributionMap.set(entry.FoodName, currentTotal + nutrientValue);
+      }
+
+      db.close();
+
+      // 6. Convertir el Mapa a un Array y ordenar
+      const results: IContributionReport[] = Array.from(contributionMap.entries())
+        .map(([name, value]) => ({ name, value }))
+        .filter(r => r.value > 0) // Devolver solo valores positivos
+        .sort((a, b) => b.value - a.value); // Ordenar DESC
+
+      return results;
+
+    } catch (error) {
+      if(db) db.close();
+      throw error;
+    }
 });
+
 
 // 4. ANÁLISIS NUTRICIONAL (GRÁFICO DE PASTEL - COMIDAS)
 ipcMain.handle('get-meal-contribution', async (
-    event,
-    userId: string, 
-    startDate: string, 
-    endDate: string, 
-    referenceDbId: number, 
-    nutrient: string
+  event,
+  userId: string,
+  startDate: string,
+  endDate: string,
+  referenceDbId: number,
+  nutrient: string
 ): Promise<IContributionReport[]> => {
 
-    // Validar nutriente
-    const allowedNutrients = [
-        'Energy_kcal', 'Water_g', 'Protein_g', 'Fat_g', 'Carbohydrate_g',
-        'SaturatedFat_g', 'MonounsaturatedFat_g', 'PolyunsaturatedFat_g', 'Cholesterol_mg',
-        'Fiber_g', 'Sugar_g', 'Ash_g', 'Calcium_mg', 'Phosphorus_mg', 'Iron_mg', 'Sodium_mg',
-        'Potassium_mg', 'Magnesium_mg', 'Zinc_mg', 'Copper_mg', 'Manganese_mg',
-        'VitaminA_ER', 'Thiamin_mg', 'Riboflavin_mg', 'Niacin_mg',
-        'PantothenicAcid_mg', 'VitaminB6_mg', 'Folate_mcg', 'VitaminB12_mcg', 'VitaminC_mg'
-    ];
-    if (!allowedNutrients.includes(nutrient)) {
-        return Promise.reject(new Error(`Invalid nutrient column name: ${nutrient}`));
-    }
+    // 1. Validar nutriente
+    const allowedNutrients = nutrientColumnNames;
+  if (!allowedNutrients.includes(nutrient)) {
+    return Promise.reject(new Error(`Invalid nutrient column name: ${nutrient}`));
+  }
+    const nutrientTotalKey = `total${nutrient}` as keyof INutrientTotals;
 
-    return new Promise((resolve, reject) => {
-        const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err: Error | null) => {
-            if (err) return reject(`Database connection error: ${err.message}`);
-        });
-
-        // Consulta que agrupa por tipo de comida
-        const query = `
-            SELECT 
-                -- 1. Formatear la salida: Poner la primera letra en mayúscula y el resto en minúscula
-                UPPER(SUBSTR(COALESCE(cl.MealType, 'Uncategorized'), 1, 1)) || LOWER(SUBSTR(COALESCE(cl.MealType, 'Uncategorized'), 2)) AS name, 
-                SUM(f.${nutrient} * (cl.Grams / 100.0)) AS value
-            FROM ConsumptionLog cl
-            JOIN Foods f ON cl.FoodID = f.FoodID
-            WHERE 
-                cl.UserID = ?
-                AND cl.ConsumptionDate BETWEEN ? AND ?
-                AND cl.ReferenceDatabaseID = ?
-                AND f.${nutrient} IS NOT NULL
-            -- 2. Agrupar por el valor en minúscula (así "Lunch" y "lunch" se unen)
-            GROUP BY LOWER(COALESCE(cl.MealType, 'Uncategorized'))
-            ORDER BY value DESC
-        `;
-
-        db.all(query, [userId, startDate, endDate, referenceDbId], (err: Error | null, rows: IContributionReport[]) => {
-            db.close();
-            if (err) {
-                return reject(new Error(`Failed to get meal contribution: ${err.message}`));
-            }
-            resolve(rows.filter(r => r.value > 0));
-        });
+    // 2. Conectar a BD
+    const db: Database = await new Promise((resolve, reject) => {
+      const dbInstance = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err: Error | null) => {
+        if (err) reject(`Database connection error: ${err.message}`);
+        else resolve(dbInstance);
+      });
     });
+
+    try {
+      // 3. Obtener logs CRUDOS (con tipo de comida)
+      const query = `
+        SELECT cl.FoodID, cl.Grams, COALESCE(cl.MealType, 'Uncategorized') AS MealName
+        FROM ConsumptionLog cl
+        WHERE 
+            cl.UserID = ?
+            AND cl.ConsumptionDate BETWEEN ? AND ?
+            AND cl.ReferenceDatabaseID = ?
+      `;
+      
+      const logEntries: any[] = await new Promise((resolve, reject) => {
+        db.all(query, [userId, startDate, endDate, referenceDbId], (err, rows) => err ? reject(err) : resolve(rows));
+      });
+
+      // 4. Mapa de resultados: { "Breakfast": 0, "Lunch": 0 }
+      const contributionMap = new Map<string, number>();
+
+      // 5. Procesar cada log recursivamente
+      for (const entry of logEntries) {
+        const nutrients = await getNutrientsForFoodRecursive(
+          entry.FoodID,
+          entry.Grams,
+          referenceDbId,
+          db
+        );
+
+        const nutrientValue = nutrients[nutrientTotalKey];
+        
+        // Agrupar por el nombre de la comida (ignorando mayúsculas/minúsculas)
+        const mealKey = entry.MealName.toLowerCase();
+        const currentTotal = contributionMap.get(mealKey) || 0;
+        contributionMap.set(mealKey, currentTotal + nutrientValue);
+      }
+
+      db.close();
+
+      // 6. Convertir el Mapa a un Array y ordenar
+      const results: IContributionReport[] = Array.from(contributionMap.entries())
+        .map(([name, value]) => ({
+            // Poner la primera letra en mayúscula
+            name: name.charAt(0).toUpperCase() + name.slice(1),
+            value 
+        }))
+        .filter(r => r.value > 0) // Devolver solo valores positivos
+        .sort((a, b) => b.value - a.value); // Ordenar DESC
+
+      return results;
+
+    } catch (error) {
+      if(db) db.close();
+      throw error;
+    }
 });
+
 
 
 // --- Diálogos Asíncronos (v0.2) ---
@@ -1596,4 +2254,279 @@ ipcMain.handle('show-info-dialog', async (event, title: string, content: string)
         return dialog.showMessageBox(window, options);
     }
     return dialog.showMessageBox(options);
+});
+
+
+
+// --- GESTIÓN DE PERFILES RDI (Módulo de Configuración) ---
+
+// 1. Obtener lista de perfiles
+ipcMain.handle('get-rdi-profiles', async (): Promise<{ ProfileID: number, ProfileName: string }[]> => {
+    return new Promise((resolve, reject) => {
+        const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => err ? reject(err) : null);
+        db.all('SELECT ProfileID, ProfileName FROM RDIProfiles ORDER BY ProfileName ASC', [], (err, rows: any[]) => {
+            db.close();
+            if (err) reject(err);
+            else resolve(rows);
+        });
+    });
+});
+
+// 2. Crear nuevo perfil
+ipcMain.handle('create-rdi-profile', async (event, profileName: string): Promise<string> => {
+    return new Promise((resolve, reject) => {
+        const trimmed = profileName?.trim();
+        if (!trimmed) return reject("El nombre del perfil no puede estar vacío.");
+        
+        const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, (err) => err ? reject(err) : null);
+        db.run('INSERT INTO RDIProfiles (ProfileName) VALUES (?)', [trimmed], function(err) {
+            db.close();
+            if (err) {
+                if (err.message.includes('UNIQUE')) reject("Ya existe un perfil con ese nombre.");
+                else reject(err.message);
+            } else {
+                resolve("Perfil creado exitosamente.");
+            }
+        });
+    });
+});
+
+// 3. Importar valores RDI desde Excel (ACTUALIZADO v0.5)
+// Espera columnas: A:Nutriente, B:Valor, C:Tipo (Opcional, default RDA)
+ipcMain.handle('import-rdi-excel', async (event, profileId: number): Promise<string> => {
+    if (!profileId) return "ID de perfil inválido.";
+
+    const result = await dialog.showOpenDialog({
+        title: 'Importar Valores RDI (Excel)',
+        filters: [{ name: 'Excel', extensions: ['xlsx'] }],
+        properties: ['openFile']
+    });
+
+    if (result.canceled || result.filePaths.length === 0) return "Importación cancelada.";
+
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.readFile(result.filePaths[0]);
+    const worksheet = workbook.worksheets[0];
+    
+    if (!worksheet) return "No se encontró hoja de cálculo.";
+
+    let importedCount = 0;
+    // ... (Mismo mapa de nutrientes de antes) ...
+    const nutrientMap: { [key: string]: string } = {
+        'calorias': 'Energy_kcal', 'energia': 'Energy_kcal', 'energy': 'Energy_kcal',
+        'proteina': 'Protein_g', 'protein': 'Protein_g',
+        'grasa': 'Fat_g', 'lipidos': 'Fat_g', 'fat': 'Fat_g',
+        'carbohidratos': 'Carbohydrate_g', 'cho': 'Carbohydrate_g',
+        'fibra': 'Fiber_g', 'azucar': 'Sugar_g',
+        'calcio': 'Calcium_mg', 'hierro': 'Iron_mg', 'sodio': 'Sodium_mg',
+        'vitamina c': 'VitaminC_mg', 'vitamina a': 'VitaminA_ER', 
+        'vitamina b12': 'VitaminB12_mcg', 'folato': 'Folate_mcg',
+        'zinc': 'Zinc_mg', 'magnesio': 'Magnesium_mg', 'potasio': 'Potassium_mg'
+    };
+
+    return new Promise((resolve, reject) => {
+        const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE);
+        
+        db.serialize(() => {
+            db.run('BEGIN TRANSACTION');
+            // Borramos datos previos para evitar mezclas corruptas
+            db.run('DELETE FROM RDIValues WHERE ProfileID = ?', [profileId]);
+
+            // Ahora insertamos 4 valores: ID, Key, Valor, TIPO
+            const stmt = db.prepare('INSERT INTO RDIValues (ProfileID, NutrientKey, RecommendedValue, Type) VALUES (?, ?, ?, ?)');
+
+            worksheet.eachRow((row, rowNumber) => {
+                if (rowNumber === 1) return; // Saltar cabecera
+
+                let nutrientName = row.getCell(1).value?.toString().trim().toLowerCase() || '';
+                let value = row.getCell(2).value;
+                // NUEVO: Leemos la columna C para el Tipo. Si no hay, usamos RDA.
+                let typeRaw = row.getCell(3).value?.toString().trim().toUpperCase();
+                
+                // Normalizar tipos permitidos
+                let type = 'RDA'; 
+                if (typeRaw) {
+                    if (['RDA', 'EAR', 'AI', 'UL', 'AMDR_MIN', 'AMDR_MAX'].includes(typeRaw)) {
+                        type = typeRaw;
+                    } else if (typeRaw.includes('MAX') || typeRaw.includes('UL')) type = 'UL';
+                    else if (typeRaw.includes('PROMEDIO') || typeRaw.includes('EAR')) type = 'EAR';
+                }
+
+                let dbKey = nutrientMap[nutrientName];
+                if (!dbKey) {
+                    const exactMatch = nutrientColumnNames.find(n => n.toLowerCase() === nutrientName);
+                    if (exactMatch) dbKey = exactMatch;
+                }
+
+                if (dbKey && value) {
+                    const numValue = parseFloat(value.toString().replace(',', '.'));
+                    if (!isNaN(numValue)) {
+                        stmt.run([profileId, dbKey, numValue, type], (err: Error) => {
+                            if (!err) importedCount++;
+                        });
+                    }
+                }
+            });
+
+            stmt.finalize();
+            db.run('COMMIT', (err) => {
+                db.close();
+                if (err) reject("Error en transacción: " + err.message);
+                else resolve(`Importados ${importedCount} valores al perfil (con soporte de tipos).`);
+            });
+        });
+    });
+});
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// --- MANEJADOR DE ADECUACIÓN NUTRICIONAL (RDI) ---
+// --- LÓGICA INTERNA REUTILIZABLE (Soluciona el error 2554) ---
+async function calculateIntakeInternal(
+    userId: string,
+    startDate: string,
+    endDate: string,
+    referenceDbId: number
+): Promise<INutrientTotals> {
+    console.log(`[Internal Calc] User: ${userId}, Dates: ${startDate} to ${endDate}`);
+
+    // 1. Validar entradas
+    const userIds = userId.split(',').map(id => id.trim()).filter(id => id.length > 0);
+    if (userIds.length === 0) throw new Error('UserID(s) are required.');
+    
+    // 2. Conectar a la BD
+    const db: Database = await new Promise((resolve, reject) => {
+        const dbInstance = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err: Error | null) => {
+            if (err) reject(`Database connection error: ${err.message}`);
+            else resolve(dbInstance);
+        });
+    });
+
+    // 3. Inicializar totales
+    const accumulatedTotals: INutrientTotals = {} as INutrientTotals;
+    nutrientTotalKeys.forEach(key => { accumulatedTotals[key] = 0; });
+
+    try {
+        const placeholders = userIds.map(() => '?').join(',');
+        const selectLogQuery = `
+            SELECT LogID, FoodID, Grams FROM ConsumptionLog
+            WHERE UserID IN (${placeholders})
+            AND ConsumptionDate BETWEEN ? AND ?
+            AND ReferenceDatabaseID = ?
+        `;
+        const params = [...userIds, startDate, endDate, referenceDbId];
+
+        const logEntries: { LogID: number, FoodID: number, Grams: number }[] = await new Promise((resolve, reject) => {
+            db.all(selectLogQuery, params, (logErr: Error | null, logEntries) => {
+                if (logErr) reject(`Error fetching log entries: ${logErr.message}`);
+                else resolve(logEntries as { LogID: number, FoodID: number, Grams: number }[]);
+            });
+        });
+
+        if (logEntries.length > 0) {
+            for (const entry of logEntries) {
+                const nutrientsForEntry = await getNutrientsForFoodRecursive(
+                    entry.FoodID, entry.Grams, referenceDbId, db
+                );
+                nutrientTotalKeys.forEach(key => {
+                    accumulatedTotals[key] += nutrientsForEntry[key];
+                });
+            }
+        }
+        db.close();
+        return accumulatedTotals;
+
+    } catch (error) {
+        if (db) db.close();
+        throw error;
+    }
+}
+
+// --- MANEJADOR IPC: CALCULATE INTAKE (Usa la lógica interna) ---
+ipcMain.handle('calculate-intake', async (event, userId, startDate, endDate, referenceDbId) => {
+    return await calculateIntakeInternal(userId, startDate, endDate, referenceDbId);
+});
+
+// --- MANEJADOR DE ADECUACIÓN NUTRICIONAL (ACTUALIZADO v0.5) ---
+ipcMain.handle('get-adequacy-report', async (
+    event, userId: string, startDate: string, endDate: string, referenceDbId: number, profileId: number = 1
+): Promise<{ nutrient: string, intake: number, rdi: number, percentage: number, type: string }[]> => {
+
+    const intakeTotals = await calculateIntakeInternal(userId, startDate, endDate, referenceDbId);
+    
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    const dayCount = Math.max(1, (end.getTime() - start.getTime()) / (1000 * 3600 * 24) + 1);
+
+    const db: Database = await new Promise((resolve, reject) => {
+        const dbInstance = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => err ? reject(err) : resolve(dbInstance));
+    });
+
+    // Obtenemos TODOS los valores del perfil
+    const allValues: any[] = await new Promise((resolve, reject) => {
+        db.all(`SELECT NutrientKey, RecommendedValue, Type FROM RDIValues WHERE ProfileID = ?`, [profileId], (err, rows) => err ? reject(err) : resolve(rows));
+    });
+    db.close();
+
+    // Agrupar por nutriente para elegir el mejor estándar
+    const valuesByNutrient: { [key: string]: { [type: string]: number } } = {};
+    allValues.forEach(v => {
+        if (!valuesByNutrient[v.NutrientKey]) valuesByNutrient[v.NutrientKey] = {};
+        valuesByNutrient[v.NutrientKey][v.Type] = v.RecommendedValue;
+    });
+
+    const report: { nutrient: string, intake: number, rdi: number, percentage: number, type: string }[] = [];
+
+    for (const nutrientKey in valuesByNutrient) {
+        const standards = valuesByNutrient[nutrientKey];
+        
+        // LÓGICA DE PRIORIDAD: RDA > AI > EAR
+        let targetValue = standards['RDA'] || standards['AI'] || standards['EAR'];
+        let targetType = standards['RDA'] ? 'RDA' : (standards['AI'] ? 'AI' : 'EAR');
+
+        if (targetValue) {
+            const totalKey = `total${nutrientKey}` as keyof INutrientTotals;
+            const totalIntake = intakeTotals[totalKey] || 0;
+            const dailyAverageIntake = totalIntake / dayCount;
+
+            report.push({
+                nutrient: nutrientKey,
+                intake: dailyAverageIntake,
+                rdi: targetValue,
+                percentage: (dailyAverageIntake / targetValue) * 100,
+                type: targetType // Le decimos al frontend qué estándar estamos usando
+            });
+        }
+    }
+
+    return report.sort((a, b) => b.percentage - a.percentage);
 });

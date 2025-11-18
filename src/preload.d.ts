@@ -10,6 +10,9 @@ export interface IDatabaseInfo {
 export interface ISearchFoodResult {
   FoodID: number;
   Name: string;
+  // *** AÑADE ESTAS DOS LÍNEAS ***
+  FoodType: 'simple' | 'recipe';
+  RecipeYieldGrams: number | null;
 }
 
 // Interface for a complete log entry (data received FROM main process)
@@ -36,11 +39,19 @@ export interface INewLogEntryData {
   grams: number;
 }
 
+export interface IRecipeIngredient {
+  foodId: number;
+  name: string; // 'name' es REQUERIDO para la UI
+  grams: number;
+}
+
 // Interface for FULL food details (sent TO main process for updating)
 // *** ACTUALIZADA CON CAMPOS DE "TABLA PAISA" ***
 export interface IFoodDetails {
   FoodID: number; // Required to identify which food to update
   Name: string; // Required new name
+  FoodType?: 'simple' | 'recipe';
+  Ingredients?: IRecipeIngredient[]; // Array de ingredientes
   // Macros & Energía
   Energy_kcal?: number | null;
   Water_g?: number | null;
@@ -143,6 +154,7 @@ export interface IContributionReport {
 export interface IDailyIntake {
     date: string;
     value: number;
+    userId?: string; // <-- AÑADE ESTA LÍNEA (útil para el frontend)
 }
 
 
@@ -152,6 +164,8 @@ export interface IElectronAPI {
   addFood: (foodName: string, databaseId: number) => Promise<string>;
   getFoods: () => Promise<{ FoodID: number; Name: string; DatabaseName: string }[]>;
   getFoodDetails: (foodId: number) => Promise<IFoodDetails | null>;
+  getRecipeIngredients: (foodId: number) => Promise<IRecipeIngredient[]>;
+  updateFoodDetails: (foodData: IFoodDetails) => Promise<string>;
   updateFoodDetails: (foodData: IFoodDetails) => Promise<string>;
   deleteFood: (foodId: number) => Promise<string>;
   importExcel: (databaseId: number) => Promise<string>;
@@ -159,9 +173,15 @@ export interface IElectronAPI {
   getDatabases: () => Promise<IDatabaseInfo[]>;
   addDatabase: (dbName: string) => Promise<string>;
   deleteDatabase: (databaseId: number) => Promise<string>;
+  purgeFoodLibrary: (databaseId: number) => Promise<string>;
+  deleteLogsForUser: (userId: string) => Promise<string>;
+  deleteAllLogs: () => Promise<string>;
+  getAllLogs: () => Promise<ILogEntry[]>; // <-- AÑADE ESTA LÍNEA
+
 
   // Consumption Log
   searchFoods: (searchTerm: string, referenceDbId: number) => Promise<ISearchFoodResult[]>;
+  searchAllFoods: (searchTerm: string) => Promise<ISearchFoodResult[]>;
   addLogEntry: (logData: INewLogEntryData) => Promise<string>;
   getLogEntries: (userId: string, date: string) => Promise<ILogEntry[]>;
   deleteLogEntry: (logId: number) => Promise<string>;
@@ -172,6 +192,9 @@ export interface IElectronAPI {
   importConsumptionLogCsv: () => Promise<{ message: string, firstEntry?: { userId: string, date: string } }>;
   
   getUniqueUserIds: () => Promise<string[]>;
+
+  deleteLogsForUser: (userId: string) => Promise<string>;
+  deleteAllLogs: () => Promise<string>;
 
   // Calculation Function (v0.2)
   calculateIntake: (
@@ -198,12 +221,13 @@ export interface IElectronAPI {
   ) => Promise<IStatisticalReport>;
 
   getDailyIntakeOverTime: (
-    userId: string, 
-    startDate: string, 
-    endDate: string, 
-    referenceDbId: number, 
+    userIds: string[], // <-- Cambiado a array
+    startDate: string,
+    endDate: string,
+    referenceDbId: number,
     nutrient: string
-  ) => Promise<IDailyIntake[]>;
+// EL RETORNO CAMBIA a un Array de Arrays
+) => Promise<IDailyIntake[][]>;
   
   getNutrientContribution: (
     userId: string, 
@@ -225,7 +249,32 @@ export interface IElectronAPI {
   showConfirmDialog: (options: Electron.MessageBoxOptions) => Promise<Electron.MessageBoxReturnValue>;
   showErrorDialog: (title: string, content: string) => Promise<Electron.MessageBoxReturnValue>;
   showInfoDialog: (title: string, content: string) => Promise<Electron.MessageBoxReturnValue>;
+
+
+getAdequacyReport: (
+    userId: string,
+    startDate: string,
+    endDate: string,
+    referenceDbId: number,
+    profileId?: number
+) => Promise<{ nutrient: string, intake: number, rdi: number, percentage: number, type:string, }[]>;
+
+
+getRdiProfiles: () => Promise<{ ProfileID: number, ProfileName: string }[]>;
+createRdiProfile: (name: string) => Promise<string>;
+importRdiExcel: (profileId: number) => Promise<string>;
+
+
 }
+
+
+
+
+
+
+
+
+
 
 
 // --- Extend the Window interface ---
