@@ -14,7 +14,6 @@
   "dependencies": {
     "csv-parse": "^6.1.0",
     "echarts": "^5.5.0",
-    "electron": "^38.3.0",
     "exceljs": "^4.4.0",
     "simple-statistics": "^7.8.3",
     "sqlite3": "^5.1.7"
@@ -22,6 +21,7 @@
   "devDependencies": {
     "@types/node": "^20.14.20",
     "@types/sqlite3": "^3.1.11",
+    "electron": "^39.2.2",
     "electron-builder": "^25.0.3",
     "typescript": "^5.9.3"
   }
