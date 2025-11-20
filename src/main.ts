@@ -1,16 +1,15 @@
 import { app, BrowserWindow, ipcMain, dialog } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
-// Correct import for typing Database instance
 import sqlite3, { Database } from 'sqlite3';
 import * as ExcelJS from 'exceljs';
 import { parse } from 'csv-parse';
-
-// *** NUEVO: Importar 'simple-statistics' ***
-// (Usamos '*' porque no tiene un export default)
 import * as ss from 'simple-statistics';
 
-// --- TYPE DEFINITIONS ---
+// ============================================================================
+//REGION: TYPE DEFINITIONS & INTERFACES
+// ============================================================================
+
 interface IDatabaseInfo {
   DatabaseID: number;
   DatabaseName: string;
@@ -19,6 +18,8 @@ interface IDatabaseInfo {
 interface ISearchFoodResult {
   FoodID: number;
   Name: string;
+  FoodType: 'simple' | 'recipe';
+  RecipeYieldGrams: number | null;
 }
 
 interface INewLogEntryData {
@@ -34,32 +35,40 @@ interface ILogEntry {
   LogID: number;
   UserID: string;
   ConsumptionDate: string;
-  MealType?: string | null; // Allow null from DB
+  MealType?: string | null;
   FoodID: number;
-  FoodName: string; // From JOIN
+  FoodName: string;
   ReferenceDatabaseID: number;
-  ReferenceDatabaseName: string; // From JOIN
+  ReferenceDatabaseName: string;
   Grams: number;
   Timestamp: string;
 }
 
-// Interface for FULL food details (including nutrients)
+interface IRecipeIngredient {
+  foodId: number;
+  grams: number;
+  name?: string;
+}
+
 interface IFoodDetails {
-  FoodID: number; // Needed for WHERE clause in update
-  DatabaseID?: number; // Usually fixed during update
+  FoodID: number;
+  DatabaseID?: number;
   Name: string;
+  FoodType?: 'simple' | 'recipe';
+  Ingredients?: IRecipeIngredient[];
+
   // Macros & Energía
   Energy_kcal?: number | null;
   Water_g?: number | null;
   Protein_g?: number | null;
-  Fat_g?: number | null; // Grasa Total
+  Fat_g?: number | null;
   Carbohydrate_g?: number | null;
-  // Sub-componentes de Grasa
+  // Sub-componentes Grasa
   SaturatedFat_g?: number | null;
   MonounsaturatedFat_g?: number | null;
   PolyunsaturatedFat_g?: number | null;
   Cholesterol_mg?: number | null;
-  // Sub-componentes de Carbohidratos
+  // Sub-componentes Carbohidratos
   Fiber_g?: number | null;
   Sugar_g?: number | null;
   // Minerales
@@ -85,7 +94,6 @@ interface IFoodDetails {
   VitaminC_mg?: number | null;
 }
 
-// Interface for Nutrient Totals Result (Module 3)
 interface INutrientTotals {
   [key: string]: number;
   totalEnergy_kcal: number;
@@ -120,119 +128,239 @@ interface INutrientTotals {
   totalVitaminC_mg: number;
 }
 
-// Interfaz para los datos del reporte formateados
 interface ExportDataRow {
   nutrient: string;
   value: number | string;
   unit: string;
 }
 
-// *** NUEVO: Interfaces para Análisis Estadístico (v0.3) ***
 interface IStatisticalReport {
-    count: number;
-    mean: number;
-    median: number;
-    stdDev: number;
-    variance: number;
-    min: number;
-    max: number;
-    q1: number; // Percentil 25 (para IQR y Box Plot)
-    q3: number; // Percentil 75 (para IQR y Box Plot)
-    rawData: number[]; // Para el Histograma
+  count: number;
+  mean: number;
+  median: number;
+  stdDev: number;
+  variance: number;
+  min: number;
+  max: number;
+  q1: number;
+  q3: number;
+  rawData: number[];
 }
 
 interface IContributionReport {
-    name: string;
-    value: number;
+  name: string;
+  value: number;
 }
 
 interface IDailyIntake {
-    date: string;
-    value: number;
+  date: string;
+  value: number;
+  userId?: string;
 }
 
+// ============================================================================
+//REGION: CONFIGURATION & CONSTANTS
+// ============================================================================
 
-// --- DATABASE SETUP ---
 const dbFolderPath = path.join(app.getPath('userData'), 'database');
 const dbPath = path.join(dbFolderPath, 'foodcalc.db');
 
-// --- Initialize Database ---
-function initializeDatabase() {
-  if (!fs.existsSync(dbFolderPath)) {
-    fs.mkdirSync(dbFolderPath, { recursive: true });
-  }
+const nutrientColumnNames: string[] = [
+  'Energy_kcal', 'Water_g', 'Protein_g', 'Fat_g', 'Carbohydrate_g',
+  'SaturatedFat_g', 'MonounsaturatedFat_g', 'PolyunsaturatedFat_g', 'Cholesterol_mg',
+  'Fiber_g', 'Sugar_g', 'Ash_g',
+  'Calcium_mg', 'Phosphorus_mg', 'Iron_mg', 'Sodium_mg', 'Potassium_mg',
+  'Magnesium_mg', 'Zinc_mg', 'Copper_mg', 'Manganese_mg',
+  'VitaminA_ER', 'Thiamin_mg', 'Riboflavin_mg', 'Niacin_mg',
+  'PantothenicAcid_mg', 'VitaminB6_mg', 'Folate_mcg', 'VitaminB12_mcg', 'VitaminC_mg'
+];
 
-  const db: Database = new (sqlite3.verbose().Database)(dbPath, (err: Error | null) => {
-    if (err) return console.error('Error opening database', err.message);
-    console.log('Database connected successfully at', dbPath);
-  });
+const nutrientTotalKeys: (keyof INutrientTotals)[] = nutrientColumnNames.map(col => `total${col}`) as (keyof INutrientTotals)[];
 
-  db.run('PRAGMA foreign_keys = ON;', (err: Error | null) => {
-    if (err) console.error("Could not enable foreign keys:", err.message);
-    else console.log("Foreign key support enabled.");
+// ============================================================================
+//REGION: DATABASE INITIALIZATION
+// ============================================================================
+
+function initializeDatabase(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (!fs.existsSync(dbFolderPath)) {
+      fs.mkdirSync(dbFolderPath, { recursive: true });
+      console.log('Created database directory:', dbFolderPath);
+    }
+
+    const db: Database = new (sqlite3.verbose().Database)(dbPath, (err: Error | null) => {
+      if (err) {
+        console.error('Error opening database', err.message);
+        return reject(err);
+      }
+      console.log('Database connected successfully at', dbPath);
+    });
+
+    db.run('PRAGMA foreign_keys = ON;', (err: Error | null) => {
+      if (err) return reject(err);
+      console.log("Foreign key support enabled.");
+    });
 
     db.serialize(() => {
-      // 1. Create FoodDatabases table
-      const createDbTableQuery = `
+      // 1. Table: FoodDatabases
+      db.run(`
         CREATE TABLE IF NOT EXISTS FoodDatabases (
           DatabaseID INTEGER PRIMARY KEY AUTOINCREMENT,
           DatabaseName TEXT NOT NULL UNIQUE
         );
-      `;
-      db.run(createDbTableQuery, (err: Error | null) => {
-        if (err) return console.error('Error creating FoodDatabases table', err.message);
-        console.log('Table "FoodDatabases" is ready.');
+      `, (err) => {
+        if (err) return reject(err);
+        
+        // Insert Default DB
+        db.run(`INSERT OR IGNORE INTO FoodDatabases (DatabaseName) VALUES (?)`, ['Default'], (insertErr) => {
+          if (insertErr) return reject(insertErr);
 
-        db.run(`INSERT OR IGNORE INTO FoodDatabases (DatabaseName) VALUES (?)`, ['Default'], (insertErr: Error | null) => {
-          if (insertErr) console.error('Error inserting default database:', insertErr.message);
-          else console.log('Checked/Inserted "Default" database.');
-
-          // 2. Create Foods table
-          const createFoodsTableQuery = `
+          // 2. Table: Foods
+          db.run(`
             CREATE TABLE IF NOT EXISTS Foods (
-              FoodID INTEGER PRIMARY KEY AUTOINCREMENT, DatabaseID INTEGER NOT NULL, Name TEXT NOT NULL,
+              FoodID INTEGER PRIMARY KEY AUTOINCREMENT,
+              DatabaseID INTEGER NOT NULL,
+              Name TEXT NOT NULL,
               Energy_kcal REAL, Water_g REAL, Protein_g REAL, Fat_g REAL, Carbohydrate_g REAL,
               SaturatedFat_g REAL, MonounsaturatedFat_g REAL, PolyunsaturatedFat_g REAL, Cholesterol_mg REAL,
               Fiber_g REAL, Sugar_g REAL, Ash_g REAL, Calcium_mg REAL, Phosphorus_mg REAL, Iron_mg REAL,
               Sodium_mg REAL, Potassium_mg REAL, Magnesium_mg REAL, Zinc_mg REAL, Copper_mg REAL,
               Manganese_mg REAL, VitaminA_ER REAL, Thiamin_mg REAL, Riboflavin_mg REAL, Niacin_mg REAL,
               PantothenicAcid_mg REAL, VitaminB6_mg REAL, Folate_mcg REAL, VitaminB12_mcg REAL, VitaminC_mg REAL,
+              FoodType TEXT NOT NULL DEFAULT 'simple',
+              RecipeYieldGrams REAL DEFAULT NULL,
               FOREIGN KEY (DatabaseID) REFERENCES FoodDatabases(DatabaseID) ON DELETE CASCADE,
               UNIQUE(DatabaseID, Name)
             );
-          `;
-          db.run(createFoodsTableQuery, (foodsErr: Error | null) => {
-            if (foodsErr) console.error('Error creating Foods table', foodsErr.message);
-            else console.log('Table "Foods" is ready (with "tabla paisa" nutrient columns).');
+          `, (foodsErr) => {
+            if (foodsErr) return reject(foodsErr);
 
-            // 3. Create ConsumptionLog Table
-            const createLogTableQuery = `
-              CREATE TABLE IF NOT EXISTS ConsumptionLog (
-                LogID INTEGER PRIMARY KEY AUTOINCREMENT, UserID TEXT NOT NULL, ConsumptionDate TEXT NOT NULL,
-                MealType TEXT, FoodID INTEGER NOT NULL, ReferenceDatabaseID INTEGER NOT NULL,
-                Grams REAL NOT NULL CHECK(Grams > 0), Timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (FoodID) REFERENCES Foods(FoodID) ON DELETE CASCADE,
-                FOREIGN KEY (ReferenceDatabaseID) REFERENCES FoodDatabases(DatabaseID) ON DELETE CASCADE
+            // 3. Table: RecipeIngredients
+            db.run(`
+              CREATE TABLE IF NOT EXISTS RecipeIngredients (
+                RecipeIngredientID INTEGER PRIMARY KEY AUTOINCREMENT,
+                ParentFoodID INTEGER NOT NULL,
+                IngredientFoodID INTEGER NOT NULL,
+                IngredientGrams REAL NOT NULL,
+                FOREIGN KEY (ParentFoodID) REFERENCES Foods(FoodID) ON DELETE CASCADE,
+                FOREIGN KEY (IngredientFoodID) REFERENCES Foods(FoodID) ON DELETE CASCADE
               );
-            `;
-            db.run(createLogTableQuery, (logTableErr: Error | null) => {
-              if (logTableErr) { console.error('Error creating ConsumptionLog table', logTableErr.message); }
-              else { console.log('Table "ConsumptionLog" is ready.'); }
+            `, (recipeErr) => {
+              if (recipeErr) return reject(recipeErr);
 
-              db.close((closeErr: Error | null) => {
-                  if (closeErr) console.error('Error closing database during init:', closeErr.message);
-                  else console.log('Database closed after initialization.');
-              });
-            }); // End Create ConsumptionLog
-          }); // End Create Foods
-        }); // End Insert Default
-      }); // End Create DBs
-    }); // End db.serialize
-  }); // End PRAGMA
+              // 4. Table: ConsumptionLog
+              db.run(`
+                CREATE TABLE IF NOT EXISTS ConsumptionLog (
+                  LogID INTEGER PRIMARY KEY AUTOINCREMENT,
+                  UserID TEXT NOT NULL,
+                  ConsumptionDate TEXT NOT NULL,
+                  MealType TEXT,
+                  FoodID INTEGER NOT NULL,
+                  ReferenceDatabaseID INTEGER NOT NULL,
+                  Grams REAL NOT NULL,
+                  Timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                  FOREIGN KEY (FoodID) REFERENCES Foods(FoodID) ON DELETE CASCADE,
+                  FOREIGN KEY (ReferenceDatabaseID) REFERENCES FoodDatabases(DatabaseID) ON DELETE CASCADE
+                );
+              `, (logErr) => {
+                if (logErr) return reject(logErr);
+
+                // 5. Table: RDIProfiles
+                db.run(`
+                  CREATE TABLE IF NOT EXISTS RDIProfiles (
+                    ProfileID INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ProfileName TEXT NOT NULL UNIQUE,
+                    Description TEXT,
+                    Source TEXT
+                  );
+                `, (rdiProfErr) => {
+                  if (rdiProfErr) return reject(rdiProfErr);
+
+                  // 6. Table: RDIValues
+                  db.run(`
+                    CREATE TABLE IF NOT EXISTS RDIValues (
+                      ValueID INTEGER PRIMARY KEY AUTOINCREMENT,
+                      ProfileID INTEGER NOT NULL,
+                      NutrientKey TEXT NOT NULL,
+                      RecommendedValue REAL NOT NULL,
+                      Type TEXT NOT NULL DEFAULT 'RDA',
+                      FOREIGN KEY (ProfileID) REFERENCES RDIProfiles(ProfileID) ON DELETE CASCADE,
+                      UNIQUE(ProfileID, NutrientKey, Type)
+                    );
+                  `, (rdiValErr) => {
+                    if (rdiValErr) return reject(rdiValErr);
+
+                    // 7. Table: SubjectProfiles
+                    db.run(`
+                      CREATE TABLE IF NOT EXISTS SubjectProfiles (
+                        SubjectID INTEGER PRIMARY KEY AUTOINCREMENT,
+                        UserID TEXT NOT NULL UNIQUE,
+                        Name TEXT,
+                        BirthDate TEXT,
+                        Gender TEXT,
+                        PhysioState TEXT,
+                        Weight_kg REAL,
+                        Height_cm REAL,
+                        Notes TEXT
+                      );
+                    `, (subjErr) => {
+                      if (subjErr) return reject(subjErr);
+
+                      // Insert Default RDI Profile Data
+                      const defaultProfileName = 'RIEN Colombia (Hombres 19-50a)';
+                      db.run(`INSERT OR IGNORE INTO RDIProfiles (ProfileID, ProfileName, Source) VALUES (1, ?, 'Res. 3803 de 2016')`, [defaultProfileName], (insertProfileErr) => {
+                        if (!insertProfileErr) {
+                          const defaultValues = [
+                            ['Energy_kcal', 2400, 'RDA'], ['Protein_g', 56, 'RDA'], ['Carbohydrate_g', 130, 'RDA'], ['Fiber_g', 38, 'AI'],
+                            ['Calcium_mg', 1000, 'RDA'], ['Calcium_mg', 2500, 'UL'], ['Iron_mg', 8, 'RDA'], ['Iron_mg', 45, 'UL'],
+                            ['Sodium_mg', 1500, 'AI'], ['Sodium_mg', 2300, 'UL'], ['Zinc_mg', 11, 'RDA'], ['Zinc_mg', 40, 'UL'],
+                            ['Magnesium_mg', 400, 'RDA'], ['VitaminC_mg', 90, 'RDA'], ['VitaminC_mg', 2000, 'UL'],
+                            ['VitaminA_ER', 900, 'RDA'], ['VitaminA_ER', 3000, 'UL'], ['VitaminB12_mcg', 2.4, 'RDA'],
+                            ['Folate_mcg', 400, 'RDA'], ['Folate_mcg', 1000, 'UL']
+                          ];
+                          const stmt = db.prepare(`INSERT OR IGNORE INTO RDIValues (ProfileID, NutrientKey, RecommendedValue, Type) VALUES (1, ?, ?, ?)`);
+                          defaultValues.forEach(val => stmt.run(val));
+                          stmt.finalize();
+                        }
+
+                        // 8. Table: SubjectMeasurements
+                        db.run(`
+                          CREATE TABLE IF NOT EXISTS SubjectMeasurements (
+                            MeasurementID INTEGER PRIMARY KEY AUTOINCREMENT,
+                            UserID TEXT NOT NULL,
+                            Date TEXT NOT NULL,
+                            Weight_kg REAL,
+                            Height_cm REAL,
+                            PhysioState TEXT,
+                            Notes TEXT,
+                            FOREIGN KEY (UserID) REFERENCES SubjectProfiles(UserID) ON DELETE CASCADE
+                          );
+                        `, (measErr) => {
+                          if (measErr) return reject(measErr);
+                          
+                          db.close((closeErr) => {
+                            if (closeErr) return reject(closeErr);
+                            console.log('Database initialization complete.');
+                            resolve();
+                          });
+                        }); // End SubjectMeasurements
+                      }); // End Default Profile
+                    }); // End SubjectProfiles
+                  }); // End RDIValues
+                }); // End RDIProfiles
+              }); // End ConsumptionLog
+            }); // End RecipeIngredients
+          }); // End Foods
+        }); // End Insert Default DB
+      }); // End FoodDatabases
+    }); // End Serialize
+  });
 }
 
+// ============================================================================
+//REGION: APP LIFECYCLE
+// ============================================================================
 
-// --- WINDOW CREATION ---
 function createWindow() {
   const mainWindow = new BrowserWindow({
     width: 900, height: 800,
@@ -245,110 +373,429 @@ function createWindow() {
   mainWindow.webContents.openDevTools();
 }
 
-// --- APP LIFECYCLE ---
-app.whenReady().then(() => {
-  initializeDatabase();
-  createWindow();
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
-    }
-  });
-});
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
+app.whenReady().then(async () => {
+  try {
+    await initializeDatabase();
+    console.log("--- Database Initialization Complete. Creating Window. ---");
+    createWindow();
+  } catch (error) {
+    console.error("!!! FATAL: Database failed to initialize. App will not start. !!!", error);
     app.quit();
   }
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
 });
 
-// --- IPC EVENT HANDLERS ---
+// ============================================================================
+//REGION: HELPER FUNCTIONS
+// ============================================================================
 
-// --- Library Management Handlers ---
+async function getNutrientsForFoodRecursive(
+  foodId: number,
+  gramsConsumed: number,
+  referenceDbId: number,
+  db: Database,
+  depth: number = 0
+): Promise<INutrientTotals> {
+  const totals: INutrientTotals = {} as INutrientTotals;
+  nutrientTotalKeys.forEach(key => { totals[key] = 0; });
+
+  if (depth > 10) {
+    console.error(`[Calc] Recursion limit reached for FoodID ${foodId}. Aborting.`);
+    return totals;
+  }
+
+  const foodDetails = await new Promise<any>((resolve, reject) => {
+    db.get(
+      `SELECT FoodID, FoodType, RecipeYieldGrams, ${nutrientColumnNames.join(', ')} FROM Foods WHERE FoodID = ? AND DatabaseID = ?`,
+      [foodId, referenceDbId],
+      (err, row) => (err ? reject(err) : resolve(row))
+    );
+  });
+
+  if (!foodDetails) {
+    return totals;
+  }
+
+  if (foodDetails.FoodType === 'simple') {
+    const factor = gramsConsumed / 100.0;
+    nutrientColumnNames.forEach((colName, index) => {
+      const nutrientValue = foodDetails[colName];
+      if (typeof nutrientValue === 'number' && !isNaN(nutrientValue)) {
+        const totalKey = nutrientTotalKeys[index];
+        totals[totalKey] += nutrientValue * factor;
+      }
+    });
+  } else {
+    const yieldGrams = foodDetails.RecipeYieldGrams;
+    if (!yieldGrams || yieldGrams <= 0) {
+      return totals;
+    }
+
+    const scaleFactor = gramsConsumed / yieldGrams;
+    const ingredients = await new Promise<any[]>((resolve, reject) => {
+      db.all(
+        `SELECT IngredientFoodID, IngredientGrams FROM RecipeIngredients WHERE ParentFoodID = ?`,
+        [foodId],
+        (err, rows) => (err ? reject(err) : resolve(rows))
+      );
+    });
+
+    for (const ingredient of ingredients) {
+      const ingredientGrams = ingredient.IngredientGrams * scaleFactor;
+      const ingredientNutrients = await getNutrientsForFoodRecursive(
+        ingredient.IngredientFoodID,
+        ingredientGrams,
+        referenceDbId,
+        db,
+        depth + 1
+      );
+
+      nutrientTotalKeys.forEach(key => {
+        totals[key] += ingredientNutrients[key];
+      });
+    }
+  }
+  return totals;
+}
+
+async function getBaseAnalyticsData(
+  userIds: string[],
+  startDate: string,
+  endDate: string,
+  referenceDbId: number,
+  nutrient: string
+): Promise<{ [userId: string]: { [date: string]: number } }> {
+  const db: Database = await new Promise((resolve, reject) => {
+    const dbInstance = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => {
+      if (err) reject(`Database connection error: ${err.message}`);
+      else resolve(dbInstance);
+    });
+  });
+
+  if (!nutrientColumnNames.includes(nutrient)) {
+    db.close();
+    return Promise.reject(new Error(`Invalid nutrient column name: ${nutrient}`));
+  }
+
+  const nutrientTotalKey = `total${nutrient}` as keyof INutrientTotals;
+  const placeholders = userIds.map(() => '?').join(',');
+
+  try {
+    const query = `
+        SELECT cl.UserID, cl.ConsumptionDate, cl.FoodID, cl.Grams
+        FROM ConsumptionLog cl
+        WHERE 
+            cl.UserID IN (${placeholders})
+            AND cl.ConsumptionDate BETWEEN ? AND ?
+            AND cl.ReferenceDatabaseID = ?
+      `;
+    const params = [...userIds, startDate, endDate, referenceDbId];
+
+    const logEntries: any[] = await new Promise((resolve, reject) => {
+      db.all(query, params, (err, rows) => err ? reject(err) : resolve(rows));
+    });
+
+    const results: { [userId: string]: { [date: string]: number } } = {};
+    userIds.forEach(id => { results[id] = {}; });
+
+    for (const entry of logEntries) {
+      const nutrients = await getNutrientsForFoodRecursive(
+        entry.FoodID,
+        entry.Grams,
+        referenceDbId,
+        db
+      );
+      const nutrientValue = nutrients[nutrientTotalKey];
+
+      if (!results[entry.UserID][entry.ConsumptionDate]) {
+        results[entry.UserID][entry.ConsumptionDate] = 0;
+      }
+      results[entry.UserID][entry.ConsumptionDate] += nutrientValue;
+    }
+
+    db.close();
+    return results;
+
+  } catch (error) {
+    if (db) db.close();
+    throw error;
+  }
+}
+
+async function calculateIntakeInternal(
+    userId: string,
+    startDate: string,
+    endDate: string,
+    referenceDbId: number
+): Promise<INutrientTotals> {
+    const userIds = userId.split(',').map(id => id.trim()).filter(id => id.length > 0);
+    if (userIds.length === 0) throw new Error('UserID(s) are required.');
+    
+    const db: Database = await new Promise((resolve, reject) => {
+        const dbInstance = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => {
+            if (err) reject(`Database connection error: ${err.message}`);
+            else resolve(dbInstance);
+        });
+    });
+
+    const accumulatedTotals: INutrientTotals = {} as INutrientTotals;
+    nutrientTotalKeys.forEach(key => { accumulatedTotals[key] = 0; });
+
+    try {
+        const placeholders = userIds.map(() => '?').join(',');
+        const selectLogQuery = `
+            SELECT LogID, FoodID, Grams FROM ConsumptionLog
+            WHERE UserID IN (${placeholders})
+            AND ConsumptionDate BETWEEN ? AND ?
+            AND ReferenceDatabaseID = ?
+        `;
+        const params = [...userIds, startDate, endDate, referenceDbId];
+
+        const logEntries: { LogID: number, FoodID: number, Grams: number }[] = await new Promise((resolve, reject) => {
+            db.all(selectLogQuery, params, (logErr, logEntries) => {
+                if (logErr) reject(`Error fetching log entries: ${logErr.message}`);
+                else resolve(logEntries as { LogID: number, FoodID: number, Grams: number }[]);
+            });
+        });
+
+        if (logEntries.length > 0) {
+            for (const entry of logEntries) {
+                const nutrientsForEntry = await getNutrientsForFoodRecursive(
+                    entry.FoodID, entry.Grams, referenceDbId, db
+                );
+                nutrientTotalKeys.forEach(key => {
+                    accumulatedTotals[key] += nutrientsForEntry[key];
+                });
+            }
+        }
+        db.close();
+        return accumulatedTotals;
+
+    } catch (error) {
+        if (db) db.close();
+        throw error;
+    }
+}
+
+// ============================================================================
+//REGION: IPC HANDLERS - FOOD LIBRARY
+// ============================================================================
 
 ipcMain.handle('add-food', async (event, foodName: string, databaseId: number): Promise<string> => {
     return new Promise((resolve, reject) => {
         if (!databaseId || databaseId <= 0) return reject('Invalid Database ID provided.');
         const trimmedFoodName = foodName?.trim();
         if (!trimmedFoodName) return reject('Food name cannot be empty.');
-        const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, (err: Error | null) => {
-            if (err) return reject(`Database connection error: ${err.message}`);
-        });
+        const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, (err) => { if (err) return reject(`DB error: ${err.message}`); });
+        
         const insertQuery = `INSERT INTO Foods (Name, DatabaseID) VALUES (?, ?)`;
-        db.run(insertQuery, [trimmedFoodName, databaseId], function (this: sqlite3.RunResult, err: Error | null) {
-            db.close((closeErr: Error | null) => {
-                if (closeErr) console.error('Error closing database (add-food):', closeErr.message);
-                if (err) {
-                    console.error('Error inserting food', err.message);
-                    if (err.message.includes('UNIQUE constraint failed')) reject(`Food named "${trimmedFoodName}" already exists in this database.`);
-                    else if (err.message.includes('FOREIGN KEY constraint failed')) reject(`Invalid Database ID (${databaseId}). Does not exist.`);
-                    else reject(`Error inserting food: ${err.message}`);
-                } else {
-                    console.log(`A new food has been added with ID: ${this.lastID} to DB ID ${databaseId}`);
-                    resolve('Food added successfully');
-                }
-            });
+        db.run(insertQuery, [trimmedFoodName, databaseId], function (this: sqlite3.RunResult, err) {
+            db.close();
+            if (err) {
+                if (err.message.includes('UNIQUE constraint failed')) reject(`Food named "${trimmedFoodName}" already exists.`);
+                else reject(`Error inserting food: ${err.message}`);
+            } else {
+                resolve('Food added successfully');
+            }
         });
     });
 });
 
 ipcMain.handle('get-foods', async (): Promise<{ FoodID: number; Name: string; DatabaseName: string }[]> => {
     return new Promise((resolve, reject) => {
-        const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err: Error | null) => {
-            if (err) return reject(`Database connection error: ${err.message}`);
-        });
+        const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => { if (err) return reject(`DB error: ${err.message}`); });
         const selectQuery = `
             SELECT f.FoodID, f.Name, d.DatabaseName
             FROM Foods f
             JOIN FoodDatabases d ON f.DatabaseID = d.DatabaseID
             ORDER BY d.DatabaseName ASC, f.Name ASC
         `;
-        db.all(selectQuery, [], (err: Error | null, rows: { FoodID: number; Name: string; DatabaseName: string }[]) => {
-            db.close((closeErr: Error | null) => {
-                if (closeErr) console.error('Error closing database (get-foods):', closeErr.message);
-                if (err) reject(`Error fetching foods: ${err.message}`);
-                else resolve(rows);
-            });
+        db.all(selectQuery, [], (err, rows: any[]) => {
+            db.close();
+            if (err) reject(`Error fetching foods: ${err.message}`);
+            else resolve(rows);
         });
     });
 });
 
 ipcMain.handle('get-food-details', async (event, foodId: number): Promise<IFoodDetails | null> => {
     return new Promise((resolve, reject) => {
-        if (!foodId || foodId <= 0) { return reject('Invalid Food ID provided.'); }
-        const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err: Error | null) => {
-            if (err) return reject(`Database connection error: ${err.message}`);
-        });
-        const selectQuery = `SELECT * FROM Foods WHERE FoodID = ?`;
-        db.get(selectQuery, [foodId], (err: Error | null, row: IFoodDetails) => {
-            db.close((closeErr: Error | null) => {
-                if (closeErr) console.error('Error closing database (get-food-details):', closeErr.message);
-            });
-            if (err) {
-                console.error('Error fetching food details:', err.message);
-                reject(`Error fetching food details: ${err.message}`);
-            } else if (!row) {
-                console.warn(`Food details not found for FoodID: ${foodId}`);
-                resolve(null);
-            } else {
-                console.log(`Fetched details for FoodID: ${foodId}`);
-                resolve(row);
-            }
+        if (!foodId || foodId <= 0) return reject('Invalid Food ID provided.');
+        const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => { if (err) return reject(`DB error: ${err.message}`); });
+        db.get(`SELECT * FROM Foods WHERE FoodID = ?`, [foodId], (err, row: IFoodDetails) => {
+            db.close();
+            if (err) reject(`Error fetching food details: ${err.message}`);
+            else resolve(row || null);
         });
     });
 });
 
+ipcMain.handle('get-recipe-ingredients', async (event, foodId: number): Promise<IRecipeIngredient[]> => {
+  return new Promise((resolve, reject) => {
+    if (!foodId || foodId <= 0) return reject('Invalid Food ID provided.');
+    const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => { if (err) return reject(`DB error: ${err.message}`); });
+    
+    const query = `
+      SELECT ri.IngredientFoodID AS foodId, f.Name AS name, d.DatabaseName AS dbName, ri.IngredientGrams AS grams
+      FROM RecipeIngredients ri
+      JOIN Foods f ON ri.IngredientFoodID = f.FoodID
+      JOIN FoodDatabases d ON f.DatabaseID = d.DatabaseID
+      WHERE ri.ParentFoodID = ?
+      ORDER BY ri.RecipeIngredientID ASC
+    `;
+    db.all(query, [foodId], (err, rows: any[]) => {
+      db.close();
+      if (err) return reject(`Error fetching ingredients: ${err.message}`);
+      
+      const ingredients: IRecipeIngredient[] = rows.map(row => ({
+        foodId: row.foodId,
+        name: `${row.name} (${row.dbName})`,
+        grams: row.grams
+      }));
+      resolve(ingredients);
+    });
+  });
+});
+
+ipcMain.handle('update-food-details', async (event, foodData: IFoodDetails): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    if (!foodData || typeof foodData.FoodID !== 'number' || foodData.FoodID <= 0) return reject('Invalid Food ID.');
+    const trimmedName = foodData.Name?.trim();
+    if (!trimmedName) return reject('Food name cannot be empty.');
+
+    const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, (err) => { if (err) return reject(`DB error: ${err.message}`); });
+
+    db.serialize(() => {
+      db.run('BEGIN TRANSACTION;', (err) => { if (err) { db.close(); return reject(err.message); } });
+
+      let recipeYield: number | null = null;
+      if (foodData.FoodType === 'recipe' && foodData.Ingredients && foodData.Ingredients.length > 0) {
+        recipeYield = foodData.Ingredients.reduce((sum, ing) => sum + ing.grams, 0);
+      }
+
+      const fieldsToUpdate: string[] = ['Name = ?', 'FoodType = ?', 'RecipeYieldGrams = ?'];
+      const values: (string | number | null)[] = [trimmedName, foodData.FoodType || 'simple', recipeYield];
+
+      type NutrientKey = Exclude<keyof IFoodDetails, 'FoodID' | 'DatabaseID' | 'Name' | 'FoodType' | 'Ingredients'>;
+      const nutrientFields: NutrientKey[] = nutrientColumnNames as NutrientKey[];
+
+      nutrientFields.forEach(field => {
+        if (foodData.hasOwnProperty(field)) {
+          fieldsToUpdate.push(`${field} = ?`);
+          const value = foodData[field]; 
+          values.push(value === undefined ? null : value);
+        }
+      });
+      values.push(foodData.FoodID);
+
+      const updateQuery = `UPDATE Foods SET ${fieldsToUpdate.join(', ')} WHERE FoodID = ?`;
+      
+      db.run(updateQuery, values, function(this: sqlite3.RunResult, err) {
+        if (err || this.changes === 0) {
+          db.run('ROLLBACK;'); db.close();
+          return reject(err ? `Update failed: ${err.message}` : `Food not found.`);
+        }
+
+        db.run(`DELETE FROM RecipeIngredients WHERE ParentFoodID = ?`, [foodData.FoodID], (delErr) => {
+          if (delErr) { db.run('ROLLBACK;'); db.close(); return reject(delErr.message); }
+
+          if (foodData.FoodType === 'recipe' && foodData.Ingredients && foodData.Ingredients.length > 0) {
+            const insertStmt = db.prepare(`INSERT INTO RecipeIngredients (ParentFoodID, IngredientFoodID, IngredientGrams) VALUES (?, ?, ?)`);
+            let processed = 0;
+            
+            foodData.Ingredients.forEach(ing => {
+              insertStmt.run([foodData.FoodID, ing.foodId, ing.grams], (insErr: Error) => {
+                processed++;
+                if (processed === foodData.Ingredients!.length) {
+                  insertStmt.finalize((finErr) => {
+                    if (finErr) { db.run('ROLLBACK;'); db.close(); return reject(finErr.message); }
+                    db.run('COMMIT;', (comErr) => { db.close(); resolve(comErr ? comErr.message : 'Updated successfully'); });
+                  });
+                }
+              });
+            });
+          } else {
+            db.run('COMMIT;', (comErr) => { db.close(); resolve(comErr ? comErr.message : 'Updated successfully'); });
+          }
+        });
+      });
+    });
+  });
+});
+
+ipcMain.handle('delete-food', async (event, foodId: number): Promise<string> => {
+    return new Promise((resolve, reject) => {
+        if (!foodId || foodId <= 0) return reject('Invalid Food ID.');
+        const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, (err) => { if (err) return reject(`DB error: ${err.message}`); });
+        db.run('PRAGMA foreign_keys = ON;', (err) => {
+             if (err) { db.close(); return reject(err.message); }
+            db.run(`DELETE FROM Foods WHERE FoodID = ?`, [foodId], function (this: sqlite3.RunResult, delErr) {
+                db.close();
+                if (delErr) reject(delErr.message);
+                else if (this.changes === 0) reject(`Food ID ${foodId} not found`);
+                else resolve('Food deleted successfully');
+            });
+        });
+    });
+});
+
+ipcMain.handle('search-foods', async (event, searchTerm: string, referenceDbId: number): Promise<ISearchFoodResult[]> => {
+  return new Promise((resolve, reject) => {
+    const trimmedSearch = searchTerm?.trim();
+    if (!trimmedSearch || !referenceDbId || referenceDbId <= 0) return resolve([]);
+    const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => { if (err) return reject(err.message); });
+    
+    const searchQuery = `SELECT FoodID, Name, FoodType, RecipeYieldGrams FROM Foods WHERE DatabaseID = ? AND Name LIKE ? ORDER BY Name ASC LIMIT 20`;
+    db.all(searchQuery, [referenceDbId, `%${trimmedSearch}%`], (err, rows: any[]) => {
+        db.close();
+        if (err) reject(err.message);
+        else resolve(rows); 
+    });
+  });
+});
+
+ipcMain.handle('search-all-foods', async (event, searchTerm: string): Promise<ISearchFoodResult[]> => {
+  return new Promise((resolve, reject) => {
+    const trimmedSearch = searchTerm?.trim();
+    if (!trimmedSearch) return resolve([]);
+    const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => { if (err) return reject(err.message); });
+
+    const searchQuery = `
+      SELECT f.FoodID, f.Name, d.DatabaseName, f.FoodType, f.RecipeYieldGrams
+      FROM Foods f
+      JOIN FoodDatabases d ON f.DatabaseID = d.DatabaseID
+      WHERE f.Name LIKE ?
+      ORDER BY f.Name ASC LIMIT 20
+    `;
+    db.all(searchQuery, [`%${trimmedSearch}%`], (err, rows: any[]) => {
+      db.close();
+      if (err) reject(err.message);
+      else {
+        const formattedRows: ISearchFoodResult[] = rows.map(row => ({
+          FoodID: row.FoodID,
+          Name: `${row.Name} (${row.DatabaseName})`,
+          FoodType: row.FoodType,
+          RecipeYieldGrams: row.RecipeYieldGrams
+        }));
+        resolve(formattedRows);
+      }
+    });
+  });
+});
+
+// ============================================================================
+//REGION: IPC HANDLERS - DATABASES
+// ============================================================================
+
 ipcMain.handle('get-databases', async (): Promise<IDatabaseInfo[]> => {
     return new Promise((resolve, reject) => {
-        const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err: Error | null) => {
-            if (err) return reject(`Database connection error: ${err.message}`);
-        });
-        const selectQuery = `SELECT DatabaseID, DatabaseName FROM FoodDatabases ORDER BY DatabaseName ASC`;
-        db.all(selectQuery, [], (err: Error | null, rows: IDatabaseInfo[]) => {
-            db.close((closeErr: Error | null) => {
-                if (closeErr) console.error('Error closing database (get-databases):', closeErr.message);
-                if (err) reject(`Error fetching databases: ${err.message}`);
-                else resolve(rows);
-            });
+        const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => { if (err) return reject(err.message); });
+        db.all(`SELECT DatabaseID, DatabaseName FROM FoodDatabases ORDER BY DatabaseName ASC`, [], (err, rows: IDatabaseInfo[]) => {
+            db.close();
+            if (err) reject(err.message); else resolve(rows);
         });
     });
 });
@@ -357,231 +804,86 @@ ipcMain.handle('add-database', async (event, dbName: string): Promise<string> =>
     return new Promise((resolve, reject) => {
         const trimmedName = dbName?.trim();
         if (!trimmedName) return reject('Database name cannot be empty.');
-        const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, (err: Error | null) => {
-            if (err) return reject(`Database connection error: ${err.message}`);
-        });
-        const insertQuery = `INSERT INTO FoodDatabases (DatabaseName) VALUES (?)`;
-        db.run(insertQuery, [trimmedName], function (this: sqlite3.RunResult, err: Error | null) {
-            db.close((closeErr: Error | null) => {
-                if (closeErr) console.error('Error closing database (add-database):', closeErr.message);
-                if (err) {
-                    console.error('Error inserting database name', err.message);
-                    if (err.message.includes('UNIQUE constraint failed')) reject(`Database named "${trimmedName}" already exists.`);
-                    else reject(`Error inserting database name: ${err.message}`);
-                } else {
-                    console.log(`New database added with ID: ${this.lastID}, Name: ${trimmedName}`);
-                    resolve('Database added successfully');
-                }
-            });
+        const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, (err) => { if (err) return reject(err.message); });
+
+        db.run(`INSERT INTO FoodDatabases (DatabaseName) VALUES (?)`, [trimmedName], function (this: sqlite3.RunResult, err) {
+            db.close();
+            if (err) {
+                if (err.message.includes('UNIQUE constraint failed')) reject(`Database "${trimmedName}" already exists.`);
+                else reject(err.message);
+            } else {
+                resolve('Database added successfully');
+            }
         });
     });
 });
 
 ipcMain.handle('delete-database', async (event, databaseId: number): Promise<string> => {
     return new Promise((resolve, reject) => {
-        if (databaseId === 1) {
-            return reject('Cannot delete the "Default" database. It is required by the application.');
-        }
-        if (!databaseId || databaseId <= 0) {
-            return reject('Invalid Database ID provided for deletion.');
-        }
-        const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, (err: Error | null) => {
-            if (err) return reject(`Database connection error: ${err.message}`);
-        });
-        db.run('PRAGMA foreign_keys = ON;', (pragmaErr: Error | null) => {
-            if (pragmaErr) {
+        if (databaseId === 1) return reject('Cannot delete the "Default" database.');
+        if (!databaseId || databaseId <= 0) return reject('Invalid Database ID.');
+        
+        const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, (err) => { if (err) return reject(err.message); });
+        db.run('PRAGMA foreign_keys = ON;', (err) => {
+            if (err) { db.close(); return reject(err.message); }
+            db.run(`DELETE FROM FoodDatabases WHERE DatabaseID = ?`, [databaseId], function (this: sqlite3.RunResult, delErr) {
                 db.close();
-                return reject(`Failed to enable foreign keys: ${pragmaErr.message}`);
-            }
-            const deleteQuery = `DELETE FROM FoodDatabases WHERE DatabaseID = ?`;
-            console.log(`Attempting to delete database with ID: ${databaseId}`);
-            db.run(deleteQuery, [databaseId], function (this: sqlite3.RunResult, err: Error | null) {
-                db.close((closeErr: Error | null) => {
-                    if (closeErr) console.error('Error closing database (delete-database):', closeErr.message);
-                });
-                if (err) {
-                    console.error('Error deleting database:', err.message);
-                    reject(`Error deleting database: ${err.message}`);
-                } else if (this.changes === 0) {
-                    reject(`Database with ID ${databaseId} not found.`);
-                } else {
-                    console.log(`Successfully deleted database ID: ${databaseId} and all associated data.`);
-                    resolve('Database deleted successfully (along with all associated foods and log entries).');
-                }
+                if (delErr) reject(delErr.message);
+                else if (this.changes === 0) reject(`Database ID ${databaseId} not found.`);
+                else resolve('Database deleted successfully.');
             });
         });
     });
 });
 
-ipcMain.handle('update-food-details', async (event, foodData: IFoodDetails): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      if (!foodData || typeof foodData.FoodID !== 'number' || foodData.FoodID <= 0) {
-        return reject('Invalid Food ID provided for update.');
-      }
-      const trimmedName = foodData.Name?.trim();
-      if (!trimmedName) {
-        return reject('Food name cannot be empty.');
-      }
-      const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, (err: Error | null) => {
-        if (err) return reject(`Database connection error: ${err.message}`);
-      });
-      const fieldsToUpdate: string[] = [ 'Name = ?' ];
-      const values: (string | number | null)[] = [ trimmedName ];
-      const nutrientFields: (keyof IFoodDetails)[] = [
-          'Energy_kcal', 'Water_g', 'Protein_g', 'Fat_g', 'Carbohydrate_g',
-          'SaturatedFat_g', 'MonounsaturatedFat_g', 'PolyunsaturatedFat_g', 'Cholesterol_mg',
-          'Fiber_g', 'Sugar_g', 'Ash_g', 'Calcium_mg', 'Phosphorus_mg', 'Iron_mg', 'Sodium_mg',
-          'Potassium_mg', 'Magnesium_mg', 'Zinc_mg', 'Copper_mg', 'Manganese_mg', 'VitaminA_ER',
-          'Thiamin_mg', 'Riboflavin_mg', 'Niacin_mg', 'PantothenicAcid_mg', 'VitaminB6_mg',
-          'Folate_mcg', 'VitaminB12_mcg', 'VitaminC_mg'
-      ];
-      nutrientFields.forEach(field => {
-          if (foodData.hasOwnProperty(field)) {
-              fieldsToUpdate.push(`${field} = ?`);
-              const value = foodData[field];
-              values.push(value === undefined ? null : value);
-          }
-      });
-      values.push(foodData.FoodID);
-      if (fieldsToUpdate.length <= 1) { db.close(); console.warn("update-food-details called with only Name change."); }
-      const updateQuery = `UPDATE Foods SET ${fieldsToUpdate.join(', ')} WHERE FoodID = ?`;
-      console.log("Executing Update Query:", updateQuery);
-      console.log("With Values:", values);
-      db.run(updateQuery, values, function(this: sqlite3.RunResult, err: Error | null) {
-        db.close((closeErr: Error | null) => {
-          if (closeErr) console.error('Error closing database (update-food-details):', closeErr.message);
-        });
-        if (err) {
-          console.error('Error updating food details:', err.message);
-          if (err.message.includes('UNIQUE constraint failed')) {
-              reject(`Failed to update: Another food named "${trimmedName}" might already exist in this database.`);
-          } else {
-              reject(`Error updating food details: ${err.message}`);
-          }
-        } else if (this.changes === 0) {
-          reject(`Food with ID ${foodData.FoodID} not found for update.`);
-        } else {
-          console.log(`Food details updated successfully for FoodID: ${foodData.FoodID}`);
-          resolve('Food details updated successfully');
-        }
-      });
-    });
-});
-
-
-//El main handle para purgar las bases de datos
 ipcMain.handle('purge-food-library', async (event, databaseId: number): Promise<string> => {
-  // ...
   return new Promise((resolve, reject) => {
-    if (!databaseId || databaseId <= 0) {
-      // ...
-      return reject('Invalid Database ID provided.');
-    }
-    
-    /* <-- ASEGÚRATE DE QUE ESTO SIGUE COMENTADO
-    // Protección eliminada por solicitud del usuario (para poder limpiar la DB "Default")
-    if (databaseId === 1) { 
-      console.log('[IPC] Debug: Rejecting. Attempt to purge "Default" DB.'); 
-      return reject('Cannot purge the "Default" database. You can only delete individual items from it.');
-    }
-    */
+    if (!databaseId || databaseId <= 0) return reject('Invalid Database ID.');
+    if (databaseId === 1) console.warn('[IPC] Purgando base de datos Default.');
 
-    // Añadimos un log para saber si estamos purgando la DB "Default"
-    if (databaseId === 1) {
-      console.warn('[IPC] Debug: ¡ATENCIÓN! Purgando la base de datos "Default".');
-    }
+    const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, (err) => { if (err) return reject(err.message); });
 
-    const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, (err: Error | null) => {
-      if (err) {
-        console.error('[IPC] Debug: DB connection error.', err.message); // <-- LOG D (ERROR)
-        return reject(`Database connection error: ${err.message}`);
-      }
-      console.log('[IPC] Debug: Database connected.'); // <-- LOG E
-    });
-
-    db.run('PRAGMA foreign_keys = ON;', (pragmaErr: Error | null) => {
-      if (pragmaErr) {
-        console.error('[IPC] Debug: Failed to enable foreign keys.', pragmaErr.message); // <-- LOG F (ERROR)
-        db.close();
-        return reject(`Failed to enable foreign keys: ${pragmaErr.message}`);
-      }
+    db.run('PRAGMA foreign_keys = ON;', (err) => {
+      if (err) { db.close(); return reject(err.message); }
       
-      const deleteQuery = `DELETE FROM Foods WHERE DatabaseID = ?`;
-      console.log(`[IPC] Debug: Attempting to run query: ${deleteQuery} with ID ${databaseId}`); // <-- LOG G
-
-      db.run(deleteQuery, [databaseId], function (this: sqlite3.RunResult, err: Error | null) {
-        if (err) {
-          console.error('[IPC] Debug: SQL query failed.', err.message); // <-- LOG H (ERROR)
-          db.close();
-          reject(`Error purging library: ${err.message}`);
-          return;
-        }
-
-        console.log(`[IPC] Debug: SQL query successful. Changes: ${this.changes}`); // <-- LOG I
-
-        db.close((closeErr: Error | null) => {
-          if (closeErr) console.error('[IPC] Debug: Error closing DB after query:', closeErr.message);
-        });
-
-        if (this.changes === 0) {
-          console.log('[IPC] Debug: Query ran but found 0 rows to delete.'); // <-- LOG J
-          resolve('No foods found in that library to delete.');
-        } else {
-          console.log(`[IPC] Debug: Successfully purged ${this.changes} food(s).`); // <-- LOG K
-          resolve(`Successfully purged ${this.changes} food entries from the database.`);
-        }
+      db.run(`DELETE FROM Foods WHERE DatabaseID = ?`, [databaseId], function (this: sqlite3.RunResult, delErr) {
+        db.close();
+        if (delErr) reject(`Error purging: ${delErr.message}`);
+        else if (this.changes === 0) resolve('No foods found to delete.');
+        else resolve(`Purged ${this.changes} entries.`);
       });
     });
   });
 });
 
-
-
-
-ipcMain.handle('delete-food', async (event, foodId: number): Promise<string> => {
-    return new Promise((resolve, reject) => {
-        if (!foodId || foodId <= 0) return reject('Invalid Food ID provided.');
-        const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, (err: Error | null) => { if (err) return reject(`Database connection error: ${err.message}`); });
-        db.run('PRAGMA foreign_keys = ON;', (pragmaErr: Error | null) => {
-             if (pragmaErr) { db.close(); return reject(`Failed to enable foreign keys: ${pragmaErr.message}`); }
-            const deleteQuery = `DELETE FROM Foods WHERE FoodID = ?`;
-            db.run(deleteQuery, [foodId], function (this: sqlite3.RunResult, err: Error | null) {
-                db.close((closeErr: Error | null) => {
-                    if (closeErr) console.error('Error closing database (delete-food):', closeErr.message);
-                    if (err) reject(`Error deleting food: ${err.message}`);
-                    else if (this.changes === 0) reject(`Food with ID ${foodId} not found`);
-                    else { console.log(`Food with ID ${foodId} deleted`); resolve('Food deleted successfully'); }
-                });
-            });
-        });
-    });
-});
+// ============================================================================
+//REGION: IPC HANDLERS - IMPORTS (EXCEL/CSV)
+// ============================================================================
 
 ipcMain.handle('import-excel', async (event, databaseId: number): Promise<string> => {
-     if (!databaseId || databaseId <= 0) return Promise.reject('Invalid Database ID provided for import.');
-    console.log(`Starting Excel import process into Database ID: ${databaseId}...`);
+    if (!databaseId || databaseId <= 0) return Promise.reject('Invalid Database ID.');
+    
     const result = await dialog.showOpenDialog({
-        title: 'Select Excel File (.xlsx)',
-        properties: ['openFile'],
-        filters: [{ name: 'Excel Files', extensions: ['xlsx'] }]
+        title: 'Select Excel File', properties: ['openFile'], filters: [{ name: 'Excel Files', extensions: ['xlsx'] }]
      });
     if (result.canceled || result.filePaths.length === 0) return 'Import cancelled.';
-    const filePath = result.filePaths[0];
-    console.log('Selected file:', filePath);
+    
     const workbook = new ExcelJS.Workbook();
-    try { await workbook.xlsx.readFile(filePath); }
-    catch (error: any) { return `Error reading file: ${error.message || error}`; }
+    try { await workbook.xlsx.readFile(result.filePaths[0]); }
+    catch (error: any) { return `Error reading file: ${error.message}`; }
+    
     const worksheet = workbook.worksheets[0];
-    if (!worksheet) return 'Error: No worksheet found in the Excel file.';
-    console.log(`Found worksheet: ${worksheet.name} with approx ${worksheet.rowCount} rows.`);
+    if (!worksheet) return 'Error: No worksheet found.';
+    
     let importedCount = 0;
     const errors: string[] = [];
     let db: Database | null = null;
+
     return new Promise((resolve, reject) => {
-        db = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, (connectErr: Error | null) => {
-            if (connectErr) return reject(`DB connection error during import: ${connectErr.message}`);
-            if (!db) return reject("DB object failed to initialize after connection.");
-            console.log('Database connected for import.');
+        db = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, (err) => {
+            if (err) return reject(err.message);
+            if (!db) return reject("DB initialization failed.");
+            
             const dbColumnMappings: { dbCol: keyof IFoodDetails; excelCol: string }[] = [
                 { dbCol: 'Name', excelCol: 'A' }, { dbCol: 'Energy_kcal', excelCol: 'B' }, { dbCol: 'Water_g', excelCol: 'C' },
                 { dbCol: 'Protein_g', excelCol: 'D' }, { dbCol: 'Fat_g', excelCol: 'E' },
@@ -599,86 +901,73 @@ ipcMain.handle('import-excel', async (event, databaseId: number): Promise<string
                 { dbCol: 'Folate_mcg', excelCol: 'AD' }, { dbCol: 'VitaminB12_mcg', excelCol: 'AE' },
                 { dbCol: 'VitaminC_mg', excelCol: 'AF' },
             ];
+            
             const dbColumns = dbColumnMappings.map(m => m.dbCol);
             dbColumns.push('DatabaseID');
             const placeholders = dbColumns.map(() => '?').join(', ');
             const insertQuery = `INSERT OR IGNORE INTO Foods (${dbColumns.join(', ')}) VALUES (${placeholders})`;
-            const stmt = db.prepare(insertQuery, (prepareErr: Error | null) => {
-                if (prepareErr || !db) { db?.close(); return reject(`DB prepare error: ${prepareErr?.message}`); }
-                const currentDb_prepare = db;
-                currentDb_prepare.run('BEGIN TRANSACTION;', (beginErr) => {
-                    if (beginErr) { stmt.finalize(); currentDb_prepare.close(); return reject("Failed to start DB transaction."); }
-                    const startRow = 3; 
+            
+            const stmt = db.prepare(insertQuery, (err) => {
+                if (err || !db) { db?.close(); return reject(err?.message); }
+                const currentDb = db;
+
+                currentDb.run('BEGIN TRANSACTION;', (beginErr) => {
+                    if (beginErr) { stmt.finalize(); currentDb.close(); return reject("Failed to start transaction."); }
+                    
                     worksheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
-                        if (rowNumber < startRow) return;
+                        if (rowNumber < 3) return;
                         const values: (string | number | null)[] = [];
                         let validRow = true;
                         let foodName = '';
+                        
                         dbColumnMappings.forEach(mapping => {
                             const cellValue = row.getCell(mapping.excelCol).value;
                             if (mapping.dbCol === 'Name') {
                                 foodName = cellValue?.toString().trim() || '';
-                                if (!foodName) { validRow = false; if(errors.length < 10) errors.push(`Row ${rowNumber}: Food name is missing (Col ${mapping.excelCol}).`); }
+                                if (!foodName) { validRow = false; if(errors.length < 10) errors.push(`Row ${rowNumber}: Missing Name.`); }
                                 values.push(foodName);
                             } else {
-                                if (cellValue == null || cellValue === undefined) {
-                                    values.push(null);
-                                } else {
-                                    const sanitizedValue = cellValue.toString().replace(',', '.'); // Reemplazar coma
-                                    const numValue = parseFloat(sanitizedValue);
-                                    values.push(isNaN(numValue) ? null : numValue);
+                                if (cellValue == null) values.push(null);
+                                else {
+                                    const num = parseFloat(cellValue.toString().replace(',', '.'));
+                                    values.push(isNaN(num) ? null : num);
                                 }
                             }
                         });
                         values.push(databaseId);
+                        
                         if (validRow && foodName) {
-                            stmt.run(values, (runErr: Error | null) => {
-                                if (runErr) { if(errors.length < 10) errors.push(`Row ${rowNumber} ('${foodName}'): DB insert error - ${runErr.message}`); }
-                                else { importedCount++; }
+                            stmt.run(values, (runErr: Error) => {
+                                if (runErr && errors.length < 10) errors.push(`Row ${rowNumber}: ${runErr.message}`);
+                                else importedCount++;
                             });
-                        } else if (validRow && !foodName && errors.length === 0) { if(errors.length < 10) errors.push(`Row ${rowNumber}: Skipped due to missing food name.`); }
-                    }); // End eachRow
-                    stmt.finalize((finalizeErr: Error | null) => {
-                        const db_finalize = currentDb_prepare;
-                        if (!db_finalize) { return reject("DB connection lost before finalizing import."); }
-                        const commitOrRollback = (finalErrOccurred: Error | null = null) => {
-                            const action = finalErrOccurred || errors.length > 0 ? 'ROLLBACK' : 'COMMIT';
-                            console.log(`${action} transaction...`);
-                            db_finalize.run(`${action};`, (commitErr) => {
-                                if (commitErr) console.error(`Error during ${action}:`, commitErr.message);
-                                db_finalize.close((closeErr: Error | null) => {
-                                    if (closeErr) console.error('Error closing database after import:', closeErr.message);
-                                    if (finalErrOccurred) reject(`Error finalizing import: ${finalErrOccurred.message}`);
-                                    else if (errors.length > 0) resolve(`Import finished with ${errors.length} errors (or more). ${action === 'ROLLBACK' ? 'No changes were saved.' : `${importedCount} foods were processed.`} First few errors: ${errors.slice(0, 5).join('; ')}`);
-                                    else resolve(`Successfully imported/ignored ${importedCount} foods into DB ID ${databaseId}.`);
-                                });
-                            });
-                        };
-                        commitOrRollback(finalizeErr);
-                    }); // End stmt.finalize
-                }); // End BEGIN TRANSACTION
-            }); // End db.prepare
-        }); // End db connect
-    }); // End Promise
-}); // End import-excel handler
+                        }
+                    });
 
-// Importar Biblioteca de Alimentos desde CSV
-ipcMain.handle('import-csv', async (event, databaseId: number): Promise<string> => {
-    if (!databaseId || databaseId <= 0) {
-        return Promise.reject('Invalid Database ID provided for CSV import.');
-    }
-    console.log(`Starting CSV import process into Database ID: ${databaseId}...`);
-    const result = await dialog.showOpenDialog({
-        title: 'Select CSV File (.csv)',
-        properties: ['openFile'],
-        filters: [{ name: 'CSV Files', extensions: ['csv'] }]
+                    stmt.finalize(() => {
+                        const action = errors.length > 0 ? 'ROLLBACK' : 'COMMIT';
+                        currentDb.run(`${action};`, (commitErr) => {
+                            currentDb.close();
+                            if (commitErr) reject(commitErr.message);
+                            else if (errors.length > 0) resolve(`Finished with errors. ${action}. Errors: ${errors.slice(0,5).join(', ')}`);
+                            else resolve(`Imported ${importedCount} foods.`);
+                        });
+                    });
+                });
+            });
+        });
     });
-    if (result.canceled || result.filePaths.length === 0) {
-        return 'CSV Import cancelled.';
-    }
-    const filePath = result.filePaths[0];
-    console.log('Selected CSV file:', filePath);
+});
 
+ipcMain.handle('import-csv', async (event, databaseId: number): Promise<string> => {
+    if (!databaseId || databaseId <= 0) return Promise.reject('Invalid Database ID.');
+    
+    const result = await dialog.showOpenDialog({
+        title: 'Select CSV File', properties: ['openFile'], filters: [{ name: 'CSV Files', extensions: ['csv'] }]
+    });
+    if (result.canceled || result.filePaths.length === 0) return 'Import cancelled.';
+    
+    const filePath = result.filePaths[0];
     let importedCount = 0;
     const errors: string[] = [];
     let db: Database | null = null;
@@ -686,48 +975,36 @@ ipcMain.handle('import-csv', async (event, databaseId: number): Promise<string> 
     const csvColumns: (keyof IFoodDetails | 'skip')[] = [
         'Name', 'Energy_kcal', 'Water_g', 'Protein_g', 'Fat_g',
         'SaturatedFat_g', 'MonounsaturatedFat_g', 'PolyunsaturatedFat_g', 'Cholesterol_mg',
-        'Carbohydrate_g', 'skip', // F.Cruda (K)
-        'Fiber_g', 'Ash_g', 'Calcium_mg', 'Phosphorus_mg', 'Iron_mg', 'Sodium_mg',
-        'Potassium_mg', 'Magnesium_mg', 'Zinc_mg', 'Copper_mg', 'Manganese_mg',
-        'skip', // VitA_IU (W)
+        'Carbohydrate_g', 'skip', 'Fiber_g', 'Ash_g', 'Calcium_mg', 'Phosphorus_mg', 'Iron_mg', 'Sodium_mg',
+        'Potassium_mg', 'Magnesium_mg', 'Zinc_mg', 'Copper_mg', 'Manganese_mg', 'skip',
         'VitaminA_ER', 'Thiamin_mg', 'Riboflavin_mg', 'Niacin_mg',
         'PantothenicAcid_mg', 'VitaminB6_mg', 'Folate_mcg', 'VitaminB12_mcg', 'VitaminC_mg'
     ];
+    
     const dbColumns = csvColumns.filter(col => col !== 'skip');
     dbColumns.push('DatabaseID');
     const placeholders = dbColumns.map(() => '?').join(', ');
     const insertQuery = `INSERT OR IGNORE INTO Foods (${dbColumns.join(', ')}) VALUES (${placeholders})`;
 
     return new Promise((resolve, reject) => {
-        db = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, (connectErr: Error | null) => {
-            if (connectErr) return reject(`DB connection error: ${connectErr.message}`);
-            if (!db) return reject("DB object failed to initialize.");
+        db = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, (err) => {
+            if (err || !db) return reject(err?.message || "DB error");
             
             const currentDb = db;
-            console.log('Database connected for CSV import.');
-
-            const stmt = currentDb.prepare(insertQuery, (prepareErr: Error | null) => {
-                if (prepareErr) {
-                    currentDb.close(); return reject(`DB prepare error: ${prepareErr.message}`);
-                }
+            const stmt = currentDb.prepare(insertQuery, (prepErr) => {
+                if (prepErr) { currentDb.close(); return reject(prepErr.message); }
 
                 currentDb.run('BEGIN TRANSACTION;', (beginErr) => {
-                    if (beginErr) {
-                        stmt.finalize(); currentDb.close(); return reject("Failed to start DB transaction.");
-                    }
+                    if (beginErr) { stmt.finalize(); currentDb.close(); return reject("Transaction failed"); }
 
-                    const parser = fs.createReadStream(filePath)
-                        .pipe(parse({
-                            delimiter: [',', ';'], // *** CORRECCIÓN: Aceptar coma O punto y coma ***
-                            from_line: 3,   // Omitir 2 filas de cabecera
-                            trim: true,
-                        }));
+                    const parser = fs.createReadStream(filePath).pipe(parse({
+                        delimiter: [',', ';'], from_line: 3, trim: true,
+                    }));
 
                     parser.on('data', (row: string[]) => {
                         try {
                             const values: (string | number | null)[] = [];
                             let foodName = '';
-
                             csvColumns.forEach((colName, index) => {
                                 if (colName === 'skip') return;
                                 const cellValue = row[index];
@@ -735,107 +1012,66 @@ ipcMain.handle('import-csv', async (event, databaseId: number): Promise<string> 
                                     foodName = cellValue?.trim() || '';
                                     values.push(foodName);
                                 } else {
-                                    if (cellValue == null || cellValue === undefined) {
-                                        values.push(null);
-                                    } else {
-                                        const sanitizedValue = cellValue.toString().replace(',', '.');
-                                        const numValue = parseFloat(sanitizedValue);
-                                        values.push(isNaN(numValue) ? null : numValue);
+                                    if (cellValue == null) values.push(null);
+                                    else {
+                                        const num = parseFloat(cellValue.toString().replace(',', '.'));
+                                        values.push(isNaN(num) ? null : num);
                                     }
                                 }
                             });
 
-                            if (!foodName) {
-                                if (errors.length < 10) errors.push(`Row (approx ${parser.info.records}): Skipped due to missing food name.`);
-                                return;
-                            }
+                            if (!foodName) { if (errors.length < 10) errors.push(`Row: Missing Name`); return; }
                             values.push(databaseId);
 
-                            stmt.run(values, (runErr: Error | null) => {
-                                if (runErr) {
-                                    if (errors.length < 10) errors.push(`Row ${parser.info.records} ('${foodName}'): DB insert error - ${runErr.message}`);
-                                } else {
-                                    importedCount++;
-                                }
+                            stmt.run(values, (runErr: Error) => {
+                                if (runErr && errors.length < 10) errors.push(`Insert error: ${runErr.message}`);
+                                else importedCount++;
                             });
-                        } catch (parseErr: any) {
-                            if (errors.length < 10) errors.push(`Row ${parser.info.records}: Error parsing row data - ${parseErr.message}`);
-                        }
+                        } catch (e: any) { if (errors.length < 10) errors.push(e.message); }
                     });
 
                     parser.on('end', () => {
-                        stmt.finalize((finalizeErr: Error | null) => {
-                            const db_finalize = currentDb;
-                            if (!db_finalize) { return reject("DB connection lost before finalizing import."); }
-                            const commitOrRollback = (finalErrOccurred: Error | null = null) => {
-                                const action = finalErrOccurred || errors.length > 0 ? 'ROLLBACK' : 'COMMIT';
-                                console.log(`${action} CSV transaction...`);
-                                db_finalize.run(`${action};`, (commitErr) => {
-                                    if (commitErr) console.error(`Error during ${action}:`, commitErr.message);
-                                    db_finalize.close((closeErr: Error | null) => {
-                                        if (closeErr) console.error('Error closing database after CSV import:', closeErr.message);
-                                        if (finalErrOccurred) reject(`Error finalizing CSV import: ${finalErrOccurred.message}`);
-                                        else if (errors.length > 0) resolve(`CSV Import finished with ${errors.length} errors. ${action === 'ROLLBACK' ? 'No changes saved.' : `${importedCount} foods processed.`} First error: ${errors[0]}`);
-                                        else resolve(`Successfully imported ${importedCount} foods from CSV.`);
-                                    });
-                                });
-                            };
-                            commitOrRollback(finalizeErr);
+                        stmt.finalize(() => {
+                            const action = errors.length > 0 ? 'ROLLBACK' : 'COMMIT';
+                            currentDb.run(`${action};`, () => {
+                                currentDb.close();
+                                if (errors.length > 0) resolve(`Import finished with errors. ${action}.`);
+                                else resolve(`Successfully imported ${importedCount} foods.`);
+                            });
                         });
                     });
-
-                    parser.on('error', (err: Error) => {
-                        console.error('CSV Parser error:', err.message);
-                        stmt.finalize();
-                        currentDb.run('ROLLBACK;', () => {
-                            currentDb.close();
-                        });
-                        reject(`Error reading CSV file: ${err.message}`);
+                    
+                    parser.on('error', (err) => {
+                        stmt.finalize(); currentDb.run('ROLLBACK;'); currentDb.close(); reject(err.message);
                     });
-
-                }); // End BEGIN TRANSACTION
-            }); // End db.prepare
-        }); // End db connect
-    }); // End Promise
-}); // End import-csv handler
-
-
-// --- Consumption Log Handlers ---
-
-ipcMain.handle('search-foods', async (event, searchTerm: string, referenceDbId: number): Promise<ISearchFoodResult[]> => {
-     return new Promise((resolve, reject) => {
-        const trimmedSearch = searchTerm?.trim();
-        if (!trimmedSearch || !referenceDbId || referenceDbId <= 0) { return resolve([]); }
-        const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err: Error | null) => { if (err) return reject(`Database connection error: ${err.message}`); });
-        const searchQuery = ` SELECT FoodID, Name FROM Foods WHERE DatabaseID = ? AND Name LIKE ? ORDER BY Name ASC LIMIT 20 `;
-        const searchPattern = `%${trimmedSearch}%`;
-        db.all(searchQuery, [referenceDbId, searchPattern], (err: Error | null, rows: ISearchFoodResult[]) => {
-            db.close((closeErr: Error | null) => { if (closeErr) console.error('Error closing database (search-foods):', closeErr.message); if (err) reject(`Error searching foods: ${err.message}`); else resolve(rows); });
+                });
+            });
         });
     });
 });
 
+// ============================================================================
+//REGION: IPC HANDLERS - CONSUMPTION LOG
+// ============================================================================
+
 ipcMain.handle('add-log-entry', async (event, logData: INewLogEntryData): Promise<string> => {
      return new Promise((resolve, reject) => {
         if (!logData) return reject('No log data provided.');
-        const userId = logData.userId?.trim();
-        const date = logData.consumptionDate; const foodId = logData.foodId;
-        const refDbId = logData.referenceDatabaseId; const grams = logData.grams;
-        if (!userId) return reject('UserID cannot be empty.');
-        if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return reject('Invalid date (YYYY-MM-DD).');
+        const { userId, consumptionDate: date, foodId, referenceDatabaseId: refDbId, grams, mealType } = logData;
+        
+        if (!userId?.trim()) return reject('UserID required.');
+        if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return reject('Invalid date.');
         if (typeof foodId !== 'number' || foodId <= 0) return reject('Invalid Food ID.');
         if (typeof refDbId !== 'number' || refDbId <= 0) return reject('Invalid Reference DB ID.');
         if (typeof grams !== 'number' || isNaN(grams) || grams <= 0) return reject('Grams must be positive.');
-        const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, (err: Error | null) => { if (err) return reject(`DB connection error: ${err.message}`); });
-        const insertQuery = ` INSERT INTO ConsumptionLog (UserID, ConsumptionDate, MealType, FoodID, ReferenceDatabaseID, Grams) VALUES (?, ?, ?, ?, ?, ?) `;
-        const mealTypeParam = logData.mealType || null;
-        const params = [userId, date, mealTypeParam, foodId, refDbId, grams];
-        db.run(insertQuery, params, function (this: sqlite3.RunResult, err: Error | null) {
-            db.close((closeErr: Error | null) => {
-                if (closeErr) console.error('Error closing DB (add-log-entry):', closeErr.message);
-                if (err) { console.error('Error inserting log:', err.message); if (err.message.includes('FOREIGN KEY')) reject('Error: Invalid Food/DB ID.'); else if (err.message.includes('CHECK constraint')) reject('Error: Grams must be > 0.'); else reject(`Error inserting log: ${err.message}`); }
-                else { console.log(`New log added with ID: ${this.lastID}`); resolve('Log entry added'); }
-            });
+        
+        const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, (err) => { if (err) return reject(err.message); });
+        const insertQuery = `INSERT INTO ConsumptionLog (UserID, ConsumptionDate, MealType, FoodID, ReferenceDatabaseID, Grams) VALUES (?, ?, ?, ?, ?, ?)`;
+        
+        db.run(insertQuery, [userId.trim(), date, mealType || null, foodId, refDbId, grams], function (this: sqlite3.RunResult, err) {
+            db.close();
+            if (err) reject(`Error inserting log: ${err.message}`);
+            else resolve('Log entry added');
         });
     });
 });
@@ -843,522 +1079,381 @@ ipcMain.handle('add-log-entry', async (event, logData: INewLogEntryData): Promis
 ipcMain.handle('get-log-entries', async (event, userId: string, date: string): Promise<ILogEntry[]> => {
      return new Promise((resolve, reject) => {
         const trimmedUserId = userId?.trim();
-        if (!trimmedUserId || !date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) { return reject('Valid UserID and Date (YYYY-MM-DD) required.'); }
-        const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err: Error | null) => { if (err) return reject(`DB connection error: ${err.message}`); });
-        const selectQuery = ` SELECT cl.*, f.Name AS FoodName, fd.DatabaseName AS ReferenceDatabaseName FROM ConsumptionLog cl JOIN Foods f ON cl.FoodID = f.FoodID JOIN FoodDatabases fd ON cl.ReferenceDatabaseID = fd.DatabaseID WHERE cl.UserID = ? AND cl.ConsumptionDate = ? ORDER BY cl.Timestamp ASC `;
-        db.all(selectQuery, [trimmedUserId, date], (err: Error | null, rows: ILogEntry[]) => {
-            db.close((closeErr: Error | null) => {
-                if (closeErr) console.error('Error closing DB (get-log-entries):', closeErr.message);
-                if (err) reject(`Error fetching logs: ${err.message}`);
-                const cleanedRows = rows.map(row => ({ ...row, MealType: row.MealType === null ? undefined : row.MealType }));
-                resolve(cleanedRows);
-            });
+        if (!trimmedUserId || !date) return reject('UserID and Date required.');
+        
+        const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => { if (err) return reject(err.message); });
+        const selectQuery = `
+            SELECT cl.*, f.Name AS FoodName, fd.DatabaseName AS ReferenceDatabaseName 
+            FROM ConsumptionLog cl 
+            JOIN Foods f ON cl.FoodID = f.FoodID 
+            JOIN FoodDatabases fd ON cl.ReferenceDatabaseID = fd.DatabaseID 
+            WHERE cl.UserID = ? AND cl.ConsumptionDate = ? 
+            ORDER BY cl.Timestamp ASC
+        `;
+        db.all(selectQuery, [trimmedUserId, date], (err, rows: ILogEntry[]) => {
+            db.close();
+            if (err) reject(err.message);
+            else resolve(rows.map(row => ({ ...row, MealType: row.MealType ?? undefined })));
         });
     });
 });
 
 ipcMain.handle('delete-log-entry', async (event, logId: number): Promise<string> => {
      return new Promise((resolve, reject) => {
-        if (!logId || typeof logId !== 'number' || logId <= 0) { return reject('Invalid Log ID.'); }
-        const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, (err: Error | null) => { if (err) return reject(`DB connection error: ${err.message}`); });
-        const deleteQuery = `DELETE FROM ConsumptionLog WHERE LogID = ?`;
-        db.run(deleteQuery, [logId], function(this: sqlite3.RunResult, err: Error | null) {
-            db.close((closeErr: Error | null) => {
-                 if (closeErr) console.error('Error closing DB (delete-log-entry):', closeErr.message);
-                 if (err) { console.error('Error deleting log:', err.message); reject(`Error deleting log: ${err.message}`); }
-                 else if (this.changes === 0) { reject(`Log entry ID ${logId} not found.`); }
-                 else { console.log(`Log entry ID ${logId} deleted.`); resolve('Log entry deleted'); }
-            });
+        if (!logId || logId <= 0) return reject('Invalid Log ID.');
+        const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, (err) => { if (err) return reject(err.message); });
+        
+        db.run(`DELETE FROM ConsumptionLog WHERE LogID = ?`, [logId], function(this: sqlite3.RunResult, err) {
+            db.close();
+            if (err) reject(err.message);
+            else if (this.changes === 0) reject(`Log ID ${logId} not found.`);
+            else resolve('Log entry deleted');
         });
     });
 });
 
 ipcMain.handle('delete-all-logs', async (): Promise<string> => {
   return new Promise((resolve, reject) => {
-    const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, (err: Error | null) => {
-      if (err) return reject(`Database connection error: ${err.message}`);
-    });
-
-    const deleteQuery = `DELETE FROM ConsumptionLog`;
-    console.log(`Attempting to delete ALL logs from ConsumptionLog table...`);
-
-    db.run(deleteQuery, [], function (this: sqlite3.RunResult, err: Error | null) {
-      db.close((closeErr: Error | null) => {
-        if (closeErr) console.error('Error closing database (delete-all-logs):', closeErr.message);
-      });
-
-      if (err) {
-        console.error('Error deleting all logs:', err.message);
-        reject(`Error deleting all logs: ${err.message}`);
-      } else {
-        resolve(`Successfully deleted all ${this.changes} log entries from the table.`);
-      }
+    const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, (err) => { if (err) return reject(err.message); });
+    db.run(`DELETE FROM ConsumptionLog`, [], function (this: sqlite3.RunResult, err) {
+      db.close();
+      if (err) reject(err.message);
+      else resolve(`Deleted ${this.changes} log entries.`);
     });
   });
 });
 
+ipcMain.handle('get-all-logs', async (): Promise<ILogEntry[]> => {
+  return new Promise((resolve, reject) => {
+    const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => { if (err) return reject(err.message); });
+    const selectQuery = `
+      SELECT cl.*, f.Name AS FoodName, fd.DatabaseName AS ReferenceDatabaseName 
+      FROM ConsumptionLog cl 
+      JOIN Foods f ON cl.FoodID = f.FoodID 
+      JOIN FoodDatabases fd ON cl.ReferenceDatabaseID = fd.DatabaseID 
+      ORDER BY cl.ConsumptionDate DESC, cl.Timestamp DESC
+    `;
+    db.all(selectQuery, [], (err, rows: ILogEntry[]) => {
+      db.close();
+      if (err) reject(err.message);
+      else resolve(rows.map(row => ({ ...row, MealType: row.MealType ?? undefined })));
+    });
+  });
+});
 
-ipcMain.handle('edit-log-entry', async (
-    event,
-    logId: number,
-    newGrams: number
-): Promise<string> => {
+ipcMain.handle('edit-log-entry', async (event, logId: number, newGrams: number): Promise<string> => {
     return new Promise((resolve, reject) => {
-        if (!logId || typeof logId !== 'number' || logId <= 0) { return reject('Invalid Log ID provided for update.'); }
-        if (typeof newGrams !== 'number' || isNaN(newGrams) || newGrams <= 0) { return reject('Invalid grams value. It must be a positive number.'); }
-        const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, (err: Error | null) => { if (err) return reject(`DB connection error: ${err.message}`); });
-        const updateQuery = `UPDATE ConsumptionLog SET Grams = ? WHERE LogID = ?`;
-        db.run(updateQuery, [newGrams, logId], function (this: sqlite3.RunResult, err: Error | null) {
-            db.close((closeErr: Error | null) => { if (closeErr) console.error('Error closing database (edit-log-entry):', closeErr.message); });
-            if (err) { console.error('Error updating log entry:', err.message); reject(`Error updating log entry: ${err.message}`); }
-            else if (this.changes === 0) { reject(`Log entry with ID ${logId} not found.`); }
-            else { console.log(`Log entry ${logId} updated successfully to ${newGrams}g.`); resolve('Log entry updated successfully.'); }
+        if (!logId || logId <= 0) return reject('Invalid Log ID.');
+        if (newGrams <= 0) return reject('Grams must be positive.');
+        
+        const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, (err) => { if (err) return reject(err.message); });
+        db.run(`UPDATE ConsumptionLog SET Grams = ? WHERE LogID = ?`, [newGrams, logId], function (this: sqlite3.RunResult, err) {
+            db.close();
+            if (err) reject(err.message);
+            else if (this.changes === 0) reject(`Log ID ${logId} not found.`);
+            else resolve('Updated successfully.');
         });
     });
 });
-
-ipcMain.handle('import-consumption-log', async (): Promise<{ message: string, firstEntry?: { userId: string, date: string } }> => {
-    console.log('Starting Consumption Log import process (Excel)...');
-
-    const result = await dialog.showOpenDialog({
-        title: 'Select Consumption Log Excel File (.xlsx)',
-        properties: ['openFile'],
-        filters: [{ name: 'Excel Files', extensions: ['xlsx'] }]
-    });
-
-    if (result.canceled || result.filePaths.length === 0) {
-        return { message: 'Log import cancelled.' };
-    }
-
-    const filePath = result.filePaths[0];
-    console.log('Selected log file:', filePath);
-
-    const dbLookupMap = new Map<string, number>();
-    const foodLookupMap = new Map<string, number>();
-
-    let importedCount = 0;
-    let skippedCount = 0;
-    const errors: string[] = [];
-    let db: Database | null = null;
-    let firstSuccessfulEntry: { userId: string, date: string } | undefined = undefined;
-
-    return new Promise((resolve, reject) => {
-        // 1. Conectar a la BD
-        db = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, (connectErr: Error | null) => {
-            if (connectErr) return reject(`DB connection error: ${connectErr.message}`);
-            if (!db) return reject("DB object failed to initialize.");
-            
-            const currentDb = db; 
-            console.log('Database connected for log import.');
-
-            // 2. Cargar DBs
-            currentDb.all(`SELECT DatabaseID, DatabaseName FROM FoodDatabases`, [], (dbErr, dbs: IDatabaseInfo[]) => {
-                if (dbErr) { currentDb.close(); return reject(`Error fetching databases: ${dbErr.message}`); }
-                dbs.forEach(dbItem => dbLookupMap.set(dbItem.DatabaseName.toLowerCase().trim(), dbItem.DatabaseID));
-                console.log(`Loaded ${dbLookupMap.size} databases into lookup map.`);
-
-                // 3. Cargar Alimentos
-                currentDb.all(`SELECT FoodID, Name, DatabaseID FROM Foods`, [], (foodErr, foods: { FoodID: number, Name: string, DatabaseID: number }[]) => {
-                    if (foodErr) { currentDb.close(); return reject(`Error fetching foods: ${foodErr.message}`); }
-                    
-                    const keysGenerated: string[] = [];
-                    foods.forEach(food => {
-                        const key = `${food.Name.toLowerCase().trim()}-${food.DatabaseID}`;
-                        foodLookupMap.set(key, food.FoodID);
-                        if(keysGenerated.length < 10) { keysGenerated.push(key); }
-                    });
-                    console.log(`Loaded ${foodLookupMap.size} foods into lookup map.`);
-                    console.log(`First 10 keys in foodLookupMap: [${keysGenerated.join(', ')}]`);
-
-                    // 4. Preparar Statement
-                    const insertQuery = ` INSERT INTO ConsumptionLog (UserID, ConsumptionDate, FoodID, ReferenceDatabaseID, Grams, MealType) VALUES (?, ?, ?, ?, ?, ?) `;
-                    const stmt = currentDb.prepare(insertQuery, (prepareErr: Error | null) => {
-                        if (prepareErr) {
-                            console.error('Error preparing log statement:', prepareErr.message);
-                            currentDb.close(); return reject(`DB prepare error: ${prepareErr.message}`);
-                        }
-                        
-                        // 5. Iniciar Transacción
-                        currentDb.run('BEGIN TRANSACTION;', async (beginErr) => {
-                            if (beginErr) {
-                                console.error("Failed to begin log transaction:", beginErr.message);
-                                stmt.finalize(); currentDb.close();
-                                return reject("Failed to start DB transaction.");
-                            }
-
-                            // 6. Leer Excel
-                            const workbook = new ExcelJS.Workbook();
-                            try {
-                                await workbook.xlsx.readFile(filePath);
-                            } catch (error: any) {
-                                console.error('Error reading log Excel file:', error);
-                                currentDb.close(); 
-                                return reject(`Error reading file: ${error.message || error}`);
-                            }
-                            const worksheet = workbook.worksheets[0];
-                            if (!worksheet) { 
-                                currentDb.close();
-                                return reject('Error: No worksheet found.'); 
-                            }
-                            const startRow = 2; 
-
-                            // 7. Iterar Filas
-                            worksheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
-                                if (rowNumber < startRow) return;
-                                try {
-                                    const userId = row.getCell('A').value?.toString().trim();
-                                    const dateValue = row.getCell('B').value;
-                                    let consumptionDate: string | null = null;
-                                    if (dateValue instanceof Date) { consumptionDate = dateValue.toISOString().split('T')[0]; }
-                                    else if (typeof dateValue === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateValue.trim())) { consumptionDate = dateValue.trim(); }
-                                    const foodName = row.getCell('C').value?.toString().toLowerCase().trim();
-                                    const dbName = row.getCell('D').value?.toString().toLowerCase().trim();
-                                    const grams = parseFloat(row.getCell('E').value as string);
-                                    const mealType = row.getCell('F').value?.toString().trim() || null;
-                                    if (!userId || !consumptionDate || !foodName || !dbName || isNaN(grams) || grams <= 0) {
-                                        if (errors.length < 10) errors.push(`Row ${rowNumber}: Invalid/missing data (UserID, Date, FoodName, DBName, or Grams).`);
-                                        skippedCount++; return;
-                                    }
-                                    const dbId = dbLookupMap.get(dbName);
-                                    if (!dbId) {
-                                        if (errors.length < 10) errors.push(`Row ${rowNumber}: Database name "${dbName}" not found. Map keys: [${Array.from(dbLookupMap.keys()).join(', ')}]`);
-                                        skippedCount++; return;
-                                    }
-                                    const lookupKey = `${foodName}-${dbId}`;
-                                    const foodId = foodLookupMap.get(lookupKey);
-                                    if (!foodId) {
-                                        if (errors.length < 10) errors.push(`Row ${rowNumber}: Food "${foodName}" (key: ${lookupKey}) not found in database "${dbName}".`);
-                                        skippedCount++; return;
-                                    }
-                                    stmt.run([userId, consumptionDate, foodId, dbId, grams, mealType], (runErr: Error | null) => {
-                                        if (runErr) { if (errors.length < 10) errors.push(`Row ${rowNumber} ('${userId}'): DB insert error - ${runErr.message}`); skippedCount++; }
-                                        else { 
-                                            importedCount++;
-                                            if (!firstSuccessfulEntry) {
-                                                firstSuccessfulEntry = { userId: userId, date: consumptionDate! };
-                                            }
-                                        }
-                                    });
-                                } catch (parseError: any) {
-                                    if (errors.length < 10) errors.push(`Row ${rowNumber}: Error parsing data - ${parseError.message}`);
-                                    skippedCount++;
-                                }
-                            }); // End eachRow
-
-                            // 9. Finalizar Transacción
-                            stmt.finalize((finalizeErr: Error | null) => {
-                                const db_finalize = currentDb;
-                                if (!db_finalize) { return reject("DB connection lost before finalizing log import."); }
-                                const commitOrRollback = (finalErrOccurred: Error | null = null) => {
-                                    const action = finalErrOccurred || errors.length > 0 ? 'ROLLBACK' : 'COMMIT';
-                                    console.log(`${action} log import transaction...`);
-                                    db_finalize.run(`${action};`, (commitErr) => {
-                                        if (commitErr) console.error(`Error during ${action}:`, commitErr.message);
-                                        db_finalize.close((closeErr: Error | null) => {
-                                            if (closeErr) console.error('Error closing DB after log import:', closeErr.message);
-                                            if (finalErrOccurred) reject(`Error finalizing: ${finalErrOccurred.message}`);
-                                            else if (errors.length > 0) resolve({ message: `Log import finished with ${errors.length} errors and ${skippedCount} skipped rows. ${action === 'ROLLBACK' ? 'No changes saved.' : `${importedCount} entries processed.`} First error: ${errors[0]}` });
-                                            else resolve({ message: `Successfully imported ${importedCount} log entries.`, firstEntry: firstSuccessfulEntry });
-                                        });
-                                    });
-                                };
-                                commitOrRollback(finalizeErr);
-                            }); // End stmt.finalize
-                        }); // End BEGIN TRANSACTION
-                    }); // End db.prepare
-                }); // End db.all (Foods)
-            }); // End db.all (Databases)
-        }); // End db connect
-    }); // End Promise
-}); // End import-consumption-log
-
-// *** NUEVO: Importar Log de Consumo desde CSV ***
-ipcMain.handle('import-consumption-log-csv', async (): Promise<{ message: string, firstEntry?: { userId: string, date: string } }> => {
-    console.log('Starting Consumption Log import process (CSV)...');
-
-    const result = await dialog.showOpenDialog({
-        title: 'Select Consumption Log CSV File (.csv)',
-        properties: ['openFile'],
-        filters: [{ name: 'CSV Files', extensions: ['csv'] }]
-    });
-
-    if (result.canceled || result.filePaths.length === 0) {
-        return { message: 'CSV Log import cancelled.' };
-    }
-
-    const filePath = result.filePaths[0];
-    console.log('Selected log file:', filePath);
-
-    const dbLookupMap = new Map<string, number>();
-    const foodLookupMap = new Map<string, number>();
-    let importedCount = 0;
-    let skippedCount = 0;
-    const errors: string[] = [];
-    let db: Database | null = null;
-    let firstSuccessfulEntry: { userId: string, date: string } | undefined = undefined;
-
-    return new Promise((resolve, reject) => {
-        db = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, (connectErr: Error | null) => {
-            if (connectErr) return reject(`DB connection error: ${connectErr.message}`);
-            if (!db) return reject("DB object failed to initialize.");
-            
-            const currentDb = db; 
-            console.log('Database connected for CSV log import.');
-
-            currentDb.all(`SELECT DatabaseID, DatabaseName FROM FoodDatabases`, [], (dbErr, dbs: IDatabaseInfo[]) => {
-                if (dbErr) { currentDb.close(); return reject(`Error fetching databases: ${dbErr.message}`); }
-                dbs.forEach(dbItem => dbLookupMap.set(dbItem.DatabaseName.toLowerCase().trim(), dbItem.DatabaseID));
-                console.log(`Loaded ${dbLookupMap.size} databases into lookup map.`);
-
-                currentDb.all(`SELECT FoodID, Name, DatabaseID FROM Foods`, [], (foodErr, foods: { FoodID: number, Name: string, DatabaseID: number }[]) => {
-                    if (foodErr) { currentDb.close(); return reject(`Error fetching foods: ${foodErr.message}`); }
-                    
-                    foods.forEach(food => {
-                        const key = `${food.Name.toLowerCase().trim()}-${food.DatabaseID}`;
-                        foodLookupMap.set(key, food.FoodID);
-                    });
-                    console.log(`Loaded ${foodLookupMap.size} foods into lookup map.`);
-
-                    const insertQuery = ` INSERT INTO ConsumptionLog (UserID, ConsumptionDate, FoodID, ReferenceDatabaseID, Grams, MealType) VALUES (?, ?, ?, ?, ?, ?) `;
-                    const stmt = currentDb.prepare(insertQuery, (prepareErr: Error | null) => {
-                        if (prepareErr) {
-                            console.error('Error preparing log statement:', prepareErr.message);
-                            currentDb.close(); return reject(`DB prepare error: ${prepareErr.message}`);
-                        }
-                        
-                        currentDb.run('BEGIN TRANSACTION;', async (beginErr) => {
-                            if (beginErr) {
-                                console.error("Failed to begin log transaction:", beginErr.message);
-                                stmt.finalize(); currentDb.close();
-                                return reject("Failed to start DB transaction.");
-                            }
-
-                            // Configurar el parser de CSV
-                            const parser = fs.createReadStream(filePath)
-                                .pipe(parse({
-                                    delimiter: [';'], // *** CORRECCIÓN: Aceptar coma O punto y coma ***
-                                    from_line: 2,   // Asumimos 1 fila de cabecera
-                                    trim: true,
-                                    columns: ['UserID', 'ConsumptionDate', 'FoodName', 'DBName', 'Grams', 'MealType'],
-                                    quote: '"', // Dejamos las comillas por si un nombre de alimento las usa
-                                    relax_quotes: true, 
-                                }));
-
-                            parser.on('data', (row: any) => {
-                                try {
-                                    const userId = row.UserID?.trim();
-                                    const consumptionDate = row.ConsumptionDate?.trim(); // Asumimos formato YYYY-MM-DD
-                                    const foodName = row.FoodName?.toLowerCase().trim();
-                                    const dbName = row.DBName?.toLowerCase().trim();
-                                    const grams = parseFloat(row.Grams?.replace(',', '.')); // Reemplazar coma decimal si existe
-                                    const mealType = row.MealType?.trim() || null;
-
-                                    if (!userId || !consumptionDate || !/^\d{4}-\d{2}-\d{2}$/.test(consumptionDate) || !foodName || !dbName || isNaN(grams) || grams <= 0) {
-                                        if (errors.length < 10) errors.push(`Row ${parser.info.records}: Invalid/missing data.`);
-                                        skippedCount++; return;
-                                    }
-
-                                    const dbId = dbLookupMap.get(dbName);
-                                    if (!dbId) {
-                                        if (errors.length < 10) errors.push(`Row ${parser.info.records}: Database name "${dbName}" not found.`);
-                                        skippedCount++; return;
-                                    }
-                                    
-                                    const lookupKey = `${foodName}-${dbId}`;
-                                    const foodId = foodLookupMap.get(lookupKey);
-                                    if (!foodId) {
-                                        if (errors.length < 10) errors.push(`Row ${parser.info.records}: Food "${foodName}" not found in database "${dbName}".`);
-                                        skippedCount++; return;
-                                    }
-                                    
-                                    stmt.run([userId, consumptionDate, foodId, dbId, grams, mealType], (runErr: Error | null) => {
-                                        if (runErr) {
-                                            if (errors.length < 10) errors.push(`Row ${parser.info.records} ('${userId}'): DB insert error - ${runErr.message}`);
-                                            skippedCount++;
-                                        } else {
-                                            importedCount++;
-                                            if (!firstSuccessfulEntry) {
-                                                firstSuccessfulEntry = { userId: userId, date: consumptionDate };
-                                            }
-                                        }
-                                    });
-                                } catch (parseError: any) {
-                                    if (errors.length < 10) errors.push(`Row ${parser.info.records}: Error parsing data - ${parseError.message}`);
-                                    skippedCount++;
-                                }
-                            }); // End parser.on('data')
-
-                            parser.on('end', () => {
-                                stmt.finalize((finalizeErr: Error | null) => {
-                                    const db_finalize = currentDb;
-                                    if (!db_finalize) { return reject("DB connection lost before finalizing log import."); }
-                                    
-                                    const commitOrRollback = (finalErrOccurred: Error | null = null) => {
-                                        const action = finalErrOccurred || errors.length > 0 ? 'ROLLBACK' : 'COMMIT';
-                                        console.log(`${action} CSV log import transaction...`);
-                                        
-                                        db_finalize.run(`${action};`, (commitErr) => {
-                                            if (commitErr) console.error(`Error during ${action}:`, commitErr.message);
-                                            
-                                            db_finalize.close((closeErr: Error | null) => {
-                                                if (closeErr) console.error('Error closing DB after CSV log import:', closeErr.message);
-                                                if (finalErrOccurred) reject(`Error finalizing: ${finalErrOccurred.message}`);
-                                                else if (errors.length > 0) resolve({ message: `CSV Log import finished with ${errors.length} errors and ${skippedCount} skipped rows. ${action === 'ROLLBACK' ? 'No changes saved.' : `${importedCount} entries processed.`} First error: ${errors[0]}` });
-                                                else resolve({ message: `Successfully imported ${importedCount} log entries from CSV.`, firstEntry: firstSuccessfulEntry });
-                                            });
-                                        });
-                                    };
-                                    commitOrRollback(finalizeErr);
-                                }); // End stmt.finalize
-                            }); // End parser.on('end')
-
-                            parser.on('error', (err: Error) => {
-                                console.error('CSV Parser error:', err.message);
-                                stmt.finalize();
-                                currentDb.run('ROLLBACK;', () => currentDb.close());
-                                reject(`Error reading CSV file: ${err.message}`);
-                            });
-
-                        }); // End BEGIN TRANSACTION
-                    }); // End db.prepare
-                }); // End db.all (Foods)
-            }); // End db.all (Databases)
-        }); // End db connect
-    }); // End Promise
-}); // End import-consumption-log-csv
-
 
 ipcMain.handle('get-unique-user-ids', async (): Promise<string[]> => {
     return new Promise((resolve, reject) => {
-        const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err: Error | null) => {
-            if (err) return reject(`Database connection error: ${err.message}`);
-        });
-        const selectQuery = `
-            SELECT DISTINCT UserID 
-            FROM ConsumptionLog 
-            ORDER BY UserID ASC
-        `;
-        db.all(selectQuery, [], (err: Error | null, rows: { UserID: string }[]) => {
-            db.close((closeErr: Error | null) => {
-                if (closeErr) console.error('Error closing database (get-unique-user-ids):', closeErr.message);
-            });
-            if (err) {
-                console.error('Error fetching unique UserIDs:', err.message);
-                reject(`Error fetching unique UserIDs: ${err.message}`);
-            } else {
-                resolve(rows.map(row => row.UserID)); 
-            }
+        const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => { if (err) return reject(err.message); });
+        db.all(`SELECT DISTINCT UserID FROM ConsumptionLog ORDER BY UserID ASC`, [], (err, rows: { UserID: string }[]) => {
+            db.close();
+            if (err) reject(err.message); else resolve(rows.map(r => r.UserID)); 
         });
     });
 });
 
+// --- Log Import Handlers (Excel/CSV) ---
 
-// --- Calculation Handler (Module 3 - v0.2) ---
-ipcMain.handle('calculate-intake', async (
-    event,
-    userId: string,
-    startDate: string,
-    endDate: string,
-    referenceDbId: number
-): Promise<INutrientTotals> => {
-    console.log(`Calculating intake for User: ${userId}, Dates: ${startDate} to ${endDate}, RefDB: ${referenceDbId}`);
+ipcMain.handle('import-consumption-log', async (): Promise<{ message: string, firstEntry?: { userId: string, date: string } }> => {
+    const result = await dialog.showOpenDialog({
+        title: 'Select Log Excel', properties: ['openFile'], filters: [{ name: 'Excel', extensions: ['xlsx'] }]
+    });
+    if (result.canceled || !result.filePaths.length) return { message: 'Import cancelled.' };
+
+    const filePath = result.filePaths[0];
+    const dbLookupMap = new Map<string, number>();
+    const foodLookupMap = new Map<string, number>();
+    let importedCount = 0, skippedCount = 0;
+    const errors: string[] = [];
+    let db: Database | null = null;
+    let firstEntry: { userId: string, date: string } | undefined = undefined;
+
     return new Promise((resolve, reject) => {
-        const trimmedUserId = userId?.trim();
-        if (!trimmedUserId) return reject('UserID is required.');
-        if (!startDate || !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) return reject('Valid Start Date (YYYY-MM-DD) required.');
-        if (!endDate || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) return reject('Valid End Date (YYYY-MM-DD) required.');
-        if (startDate > endDate) return reject('Start Date cannot be after End Date.');
-        if (typeof referenceDbId !== 'number' || referenceDbId <= 0) return reject('Valid Reference DB ID required.');
-        const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err: Error | null) => {
-            if (err) return reject(`Database connection error: ${err.message}`);
+        db = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, (err) => {
+            if (err || !db) return reject(err?.message || 'DB error');
+            const currentDb = db;
+
+            currentDb.all(`SELECT DatabaseID, DatabaseName FROM FoodDatabases`, [], (dbErr, dbs: IDatabaseInfo[]) => {
+                if (dbErr) { currentDb.close(); return reject(dbErr.message); }
+                dbs.forEach(x => dbLookupMap.set(x.DatabaseName.toLowerCase().trim(), x.DatabaseID));
+
+                currentDb.all(`SELECT FoodID, Name, DatabaseID FROM Foods`, [], (foodErr, foods: any[]) => {
+                    if (foodErr) { currentDb.close(); return reject(foodErr.message); }
+                    foods.forEach(x => foodLookupMap.set(`${x.Name.toLowerCase().trim()}-${x.DatabaseID}`, x.FoodID));
+
+                    const stmt = currentDb.prepare(`INSERT INTO ConsumptionLog (UserID, ConsumptionDate, FoodID, ReferenceDatabaseID, Grams, MealType) VALUES (?, ?, ?, ?, ?, ?)`);
+                    
+                    currentDb.run('BEGIN TRANSACTION;', async (beginErr) => {
+                        if (beginErr) { stmt.finalize(); currentDb.close(); return reject("Transaction failed"); }
+
+                        const workbook = new ExcelJS.Workbook();
+                        try { await workbook.xlsx.readFile(filePath); } catch (e: any) { currentDb.close(); return reject(e.message); }
+                        
+                        const worksheet = workbook.worksheets[0];
+                        if (!worksheet) { currentDb.close(); return reject('No worksheet.'); }
+
+                        worksheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+                            if (rowNumber < 2) return;
+                            try {
+                                const userId = row.getCell('A').value?.toString().trim();
+                                let dateVal = row.getCell('B').value;
+                                let cDate: string | null = null;
+                                if (dateVal instanceof Date) cDate = dateVal.toISOString().split('T')[0];
+                                else if (typeof dateVal === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateVal.trim())) cDate = dateVal.trim();
+                                
+                                const foodName = row.getCell('C').value?.toString().toLowerCase().trim();
+                                const dbName = row.getCell('D').value?.toString().toLowerCase().trim();
+                                const grams = parseFloat(row.getCell('E').value as string);
+                                const mealType = row.getCell('F').value?.toString().trim() || null;
+
+                                if (!userId || !cDate || !foodName || !dbName || isNaN(grams)) { skippedCount++; return; }
+
+                                const dbId = dbLookupMap.get(dbName);
+                                if (!dbId) { skippedCount++; return; }
+                                const foodId = foodLookupMap.get(`${foodName}-${dbId}`);
+                                if (!foodId) { skippedCount++; return; }
+
+                                stmt.run([userId, cDate, foodId, dbId, grams, mealType], (runErr) => {
+                                    if (runErr) { if (errors.length < 10) errors.push(runErr.message); skippedCount++; }
+                                    else {
+                                        importedCount++;
+                                        if (!firstEntry) firstEntry = { userId, date: cDate! };
+                                    }
+                                });
+                            } catch (e) { skippedCount++; }
+                        });
+
+                        stmt.finalize(() => {
+                            const action = errors.length > 0 ? 'ROLLBACK' : 'COMMIT';
+                            currentDb.run(`${action};`, () => {
+                                currentDb.close();
+                                if (errors.length > 0) resolve({ message: `Errors encountered. ${action}` });
+                                else resolve({ message: `Imported ${importedCount} entries.`, firstEntry });
+                            });
+                        });
+                    });
+                });
+            });
         });
-        
-        const selectLogQuery = ` SELECT LogID, FoodID, Grams FROM ConsumptionLog WHERE UserID = ? AND ConsumptionDate BETWEEN ? AND ? AND ReferenceDatabaseID = ? `;
-        
-        db.all(selectLogQuery, [trimmedUserId, startDate, endDate, referenceDbId], (logErr: Error | null, logEntries: { LogID: number, FoodID: number, Grams: number }[]) => {
-            if (logErr) { db.close(); return reject(`Error fetching log entries: ${logErr.message}`); }
-            const nutrientColumns = [
-                'Energy_kcal', 'Water_g', 'Protein_g', 'Fat_g', 'Carbohydrate_g',
-                'SaturatedFat_g', 'MonounsaturatedFat_g', 'PolyunsaturatedFat_g', 'Cholesterol_mg',
-                'Fiber_g', 'Sugar_g', 'Ash_g',
-                'Calcium_mg', 'Phosphorus_mg', 'Iron_mg', 'Sodium_mg', 'Potassium_mg',
-                'Magnesium_mg', 'Zinc_mg', 'Copper_mg', 'Manganese_mg',
-                'VitaminA_ER', 'Thiamin_mg', 'Riboflavin_mg', 'Niacin_mg',
-                'PantothenicAcid_mg', 'VitaminB6_mg', 'Folate_mcg', 'VitaminB12_mcg', 'VitaminC_mg'
-            ];
-            const zeroTotals: INutrientTotals = {} as INutrientTotals;
-            nutrientColumns.forEach(col => { zeroTotals[`total${col}`] = 0; });
-            if (logEntries.length === 0) {
-                db.close(); console.log("No log entries found, returning zero totals."); return resolve(zeroTotals);
-            }
-            const selectFoodQuery = ` SELECT FoodID, ${nutrientColumns.join(', ')} FROM Foods WHERE FoodID = ? AND DatabaseID = ? `;
-            const totals: INutrientTotals = { ...zeroTotals };
-            let processedEntries = 0;
-            const errors: string[] = [];
-            logEntries.forEach(entry => {
-                db.get(selectFoodQuery, [entry.FoodID, referenceDbId], (foodErr: Error | null, foodDetails: any) => {
-                    processedEntries++;
-                    if (foodErr) { errors.push(`Error fetching FoodID ${entry.FoodID}: ${foodErr.message}`); }
-                    else if (!foodDetails) { errors.push(`Details not found for FoodID ${entry.FoodID} in DB ${referenceDbId} (LogID: ${entry.LogID}).`); }
-                    else {
-                        const factor = entry.Grams / 100.0;
-                        nutrientColumns.forEach(colName => {
-                            const nutrientValue = foodDetails[colName];
-                            if (typeof nutrientValue === 'number' && !isNaN(nutrientValue)) {
-                                const totalKey = `total${colName}`;
-                                totals[totalKey] = (totals[totalKey] || 0) + (nutrientValue * factor);
-                            }
+    });
+});
+
+ipcMain.handle('import-consumption-log-csv', async (): Promise<{ message: string, firstEntry?: { userId: string, date: string } }> => {
+    const result = await dialog.showOpenDialog({
+        title: 'Select Log CSV', properties: ['openFile'], filters: [{ name: 'CSV', extensions: ['csv'] }]
+    });
+    if (result.canceled || !result.filePaths.length) return { message: 'Cancelled.' };
+    const filePath = result.filePaths[0];
+
+    const dbLookupMap = new Map<string, number>();
+    const foodLookupMap = new Map<string, number>();
+    let importedCount = 0, skippedCount = 0;
+    const errors: string[] = [];
+    let db: Database | null = null;
+    let firstEntry: { userId: string, date: string } | undefined = undefined;
+
+    return new Promise((resolve, reject) => {
+        db = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, (err) => {
+            if (err || !db) return reject(err?.message || 'DB error');
+            const currentDb = db;
+
+            currentDb.all(`SELECT DatabaseID, DatabaseName FROM FoodDatabases`, [], (dbErr, dbs: any[]) => {
+                if (dbErr) { currentDb.close(); return reject(dbErr.message); }
+                dbs.forEach((x: any) => dbLookupMap.set(x.DatabaseName.toLowerCase().trim(), x.DatabaseID));
+
+                currentDb.all(`SELECT FoodID, Name, DatabaseID FROM Foods`, [], (foodErr, foods: any[]) => {
+                    if (foodErr) { currentDb.close(); return reject(foodErr.message); }
+                    foods.forEach((x: any) => foodLookupMap.set(`${x.Name.toLowerCase().trim()}-${x.DatabaseID}`, x.FoodID));
+
+                    const stmt = currentDb.prepare(`INSERT INTO ConsumptionLog (UserID, ConsumptionDate, FoodID, ReferenceDatabaseID, Grams, MealType) VALUES (?, ?, ?, ?, ?, ?)`);
+                    
+                    currentDb.run('BEGIN TRANSACTION;', (beginErr) => {
+                        if (beginErr) { stmt.finalize(); currentDb.close(); return reject("Transaction failed"); }
+
+                        const parser = fs.createReadStream(filePath).pipe(parse({
+                            delimiter: [';'], from_line: 2, trim: true, columns: ['UserID', 'ConsumptionDate', 'FoodName', 'DBName', 'Grams', 'MealType'],
+                            quote: '"', relax_quotes: true
+                        }));
+
+                        parser.on('data', (row: any) => {
+                            try {
+                                const userId = row.UserID?.trim();
+                                const cDate = row.ConsumptionDate?.trim();
+                                const foodName = row.FoodName?.toLowerCase().trim();
+                                const dbName = row.DBName?.toLowerCase().trim();
+                                const grams = parseFloat(row.Grams?.replace(',', '.'));
+                                const mealType = row.MealType?.trim() || null;
+
+                                if (!userId || !cDate || !foodName || !dbName || isNaN(grams)) { skippedCount++; return; }
+                                
+                                const dbId = dbLookupMap.get(dbName);
+                                if (!dbId) { skippedCount++; return; }
+                                const foodId = foodLookupMap.get(`${foodName}-${dbId}`);
+                                if (!foodId) { skippedCount++; return; }
+
+                                stmt.run([userId, cDate, foodId, dbId, grams, mealType], (runErr) => {
+                                    if (runErr) { errors.push(runErr.message); skippedCount++; }
+                                    else { importedCount++; if(!firstEntry) firstEntry = { userId, date: cDate }; }
+                                });
+                            } catch (e) { skippedCount++; }
                         });
-                    }
-                    if (processedEntries === logEntries.length) {
-                        db.close((closeErr: Error | null) => {
-                            if (closeErr) console.error("Error closing DB after calculation:", closeErr.message);
-                            if (errors.length > 0) { console.warn(`Calculation finished with ${errors.length} errors. First error: ${errors[0]}`); }
-                            console.log("Calculation successful. Totals:", totals);
-                            resolve(totals);
+
+                        parser.on('end', () => {
+                            stmt.finalize(() => {
+                                const action = errors.length > 0 ? 'ROLLBACK' : 'COMMIT';
+                                currentDb.run(`${action};`, () => {
+                                    currentDb.close();
+                                    if (errors.length > 0) resolve({ message: `Errors encountered. ${action}` });
+                                    else resolve({ message: `Imported ${importedCount} entries.`, firstEntry });
+                                });
+                            });
                         });
-                    }
-                }); // End db.get
-            }); // End forEach
-        }); // End db.all
-    }); // End Promise
-}); // End ipcMain.handle 'calculate-intake'
+                        parser.on('error', (err) => { stmt.finalize(); currentDb.run('ROLLBACK;'); currentDb.close(); reject(err.message); });
+                    });
+                });
+            });
+        });
+    });
+});
 
+// ============================================================================
+//REGION: IPC HANDLERS - ANALYTICS & REPORTS
+// ============================================================================
 
-ipcMain.handle('export-report', async (
-  event,
-  reportTitle: string,
-  data: ExportDataRow[],
-  format: 'csv' | 'xlsx'
-): Promise<string> => {
+ipcMain.handle('get-statistical-report', async (event, userIds: string[], startDate: string, endDate: string, referenceDbId: number, nutrient: string): Promise<IStatisticalReport> => {
+  const dailyDataByUser = await getBaseAnalyticsData(userIds, startDate, endDate, referenceDbId, nutrient);
+  const userAverages: number[] = [];
+  const rawDailyData: number[] = []; 
 
-  const filters = format === 'csv'
-    ? [{ name: 'CSV File', extensions: ['csv'] }]
-    : [{ name: 'Excel File', extensions: ['xlsx'] }];
-  
-  const defaultFileName = `${reportTitle.replace(/[\(\) \/:]/g, '_')}.${format}`;
-
-  const { canceled, filePath } = await dialog.showSaveDialog({
-    title: `Export Report as ${format.toUpperCase()}`,
-    defaultPath: defaultFileName,
-    filters: filters,
-  });
-
-  if (canceled || !filePath) {
-    return 'Export cancelled.';
+  for (const userId of Object.keys(dailyDataByUser)) {
+      const dailyTotals = Object.values(dailyDataByUser[userId]);
+      if (dailyTotals.length > 0) {
+          const userTotal = dailyTotals.reduce((sum, val) => sum + val, 0);
+          userAverages.push(userTotal / dailyTotals.length);
+          rawDailyData.push(...dailyTotals);
+      }
   }
 
-  console.log(`Exporting report to: ${filePath}`);
+  if (userAverages.length === 0) throw new Error("No data found.");
+
+  const report: IStatisticalReport = {
+      count: userAverages.length,
+      mean: ss.mean(userAverages),
+      median: ss.median(userAverages),
+      stdDev: ss.standardDeviation(userAverages),
+      variance: ss.variance(userAverages),
+      min: ss.min(userAverages),
+      max: ss.max(userAverages),
+      q1: ss.quantile(userAverages, 0.25),
+      q3: ss.quantile(userAverages, 0.75),
+      rawData: rawDailyData 
+  };
+  return report;
+});
+
+ipcMain.handle('get-daily-intake-over-time', async (event, userIds: string[], startDate: string, endDate: string, referenceDbId: number, nutrient: string): Promise<IDailyIntake[][]> => {
+    const dailyDataByUser = await getBaseAnalyticsData(userIds, startDate, endDate, referenceDbId, nutrient);
+    const results: IDailyIntake[][] = [];
+    
+    for (const userId of userIds) {
+        const userDataMap = dailyDataByUser[userId];
+        if (userDataMap) {
+            const userDailyIntake: IDailyIntake[] = Object.keys(userDataMap).map(date => ({
+                date: date, value: userDataMap[date], userId: userId
+            }));
+            userDailyIntake.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+            if (userDailyIntake.length > 0) results.push(userDailyIntake);
+        }
+    }
+    return results;
+});
+
+ipcMain.handle('get-nutrient-contribution', async (event, userId: string, startDate: string, endDate: string, referenceDbId: number, nutrient: string): Promise<IContributionReport[]> => {
+    if (!nutrientColumnNames.includes(nutrient)) return Promise.reject(new Error(`Invalid nutrient.`));
+    const nutrientTotalKey = `total${nutrient}` as keyof INutrientTotals;
+    
+    const db: Database = await new Promise((resolve, reject) => {
+      const dbInstance = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => err ? reject(err) : resolve(dbInstance));
+    });
+
+    try {
+      const query = `SELECT cl.FoodID, cl.Grams, f.Name AS FoodName FROM ConsumptionLog cl JOIN Foods f ON cl.FoodID = f.FoodID WHERE cl.UserID = ? AND cl.ConsumptionDate BETWEEN ? AND ? AND cl.ReferenceDatabaseID = ?`;
+      const logEntries: any[] = await new Promise((resolve, reject) => {
+        db.all(query, [userId, startDate, endDate, referenceDbId], (err, rows) => err ? reject(err) : resolve(rows));
+      });
+
+      const contributionMap = new Map<string, number>();
+      for (const entry of logEntries) {
+        const nutrients = await getNutrientsForFoodRecursive(entry.FoodID, entry.Grams, referenceDbId, db);
+        const val = nutrients[nutrientTotalKey];
+        contributionMap.set(entry.FoodName, (contributionMap.get(entry.FoodName) || 0) + val);
+      }
+      db.close();
+
+      return Array.from(contributionMap.entries())
+        .map(([name, value]) => ({ name, value }))
+        .filter(r => r.value > 0)
+        .sort((a, b) => b.value - a.value);
+    } catch (error) { if(db) db.close(); throw error; }
+});
+
+ipcMain.handle('get-meal-contribution', async (event, userId: string, startDate: string, endDate: string, referenceDbId: number, nutrient: string): Promise<IContributionReport[]> => {
+    if (!nutrientColumnNames.includes(nutrient)) return Promise.reject(new Error(`Invalid nutrient.`));
+    const nutrientTotalKey = `total${nutrient}` as keyof INutrientTotals;
+
+    const db: Database = await new Promise((resolve, reject) => {
+      const dbInstance = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => err ? reject(err) : resolve(dbInstance));
+    });
+
+    try {
+      const query = `SELECT cl.FoodID, cl.Grams, COALESCE(cl.MealType, 'Uncategorized') AS MealName FROM ConsumptionLog cl WHERE cl.UserID = ? AND cl.ConsumptionDate BETWEEN ? AND ? AND cl.ReferenceDatabaseID = ?`;
+      const logEntries: any[] = await new Promise((resolve, reject) => {
+        db.all(query, [userId, startDate, endDate, referenceDbId], (err, rows) => err ? reject(err) : resolve(rows));
+      });
+
+      const contributionMap = new Map<string, number>();
+      for (const entry of logEntries) {
+        const nutrients = await getNutrientsForFoodRecursive(entry.FoodID, entry.Grams, referenceDbId, db);
+        const val = nutrients[nutrientTotalKey];
+        const mealKey = entry.MealName.toLowerCase();
+        contributionMap.set(mealKey, (contributionMap.get(mealKey) || 0) + val);
+      }
+      db.close();
+
+      return Array.from(contributionMap.entries())
+        .map(([name, value]) => ({ name: name.charAt(0).toUpperCase() + name.slice(1), value }))
+        .filter(r => r.value > 0)
+        .sort((a, b) => b.value - a.value);
+    } catch (error) { if(db) db.close(); throw error; }
+});
+
+ipcMain.handle('export-report', async (event, reportTitle: string, data: ExportDataRow[], format: 'csv' | 'xlsx'): Promise<string> => {
+  const defaultFileName = `${reportTitle.replace(/[\(\) \/:]/g, '_')}.${format}`;
+  const { canceled, filePath } = await dialog.showSaveDialog({
+    title: `Export Report as ${format.toUpperCase()}`, defaultPath: defaultFileName,
+    filters: format === 'csv' ? [{ name: 'CSV', extensions: ['csv'] }] : [{ name: 'Excel', extensions: ['xlsx'] }],
+  });
+
+  if (canceled || !filePath) return 'Export cancelled.';
 
   try {
     if (format === 'csv') {
-      const csvHeader = "Nutriente,Valor,Unidad\n";
-      const csvRows = data.map(row =>
-        `"${row.nutrient}","${row.value}","${row.unit}"`
-      ).join('\n');
-      const csvContent = csvHeader + csvRows;
+      const csvContent = "Nutriente,Valor,Unidad\n" + data.map(row => `"${row.nutrient}","${row.value}","${row.unit}"`).join('\n');
       fs.writeFileSync(filePath, csvContent, 'utf-8');
-
     } else {
       const workbook = new ExcelJS.Workbook();
       const worksheet = workbook.addWorksheet('Report');
@@ -1367,327 +1462,289 @@ ipcMain.handle('export-report', async (
       worksheet.getCell('A1').font = { size: 16, bold: true };
       worksheet.addRow([]);
       worksheet.addRow(['Nutriente', 'Valor', 'Unidad']);
+      
       const headerRow = worksheet.lastRow!;
       headerRow.font = { bold: true };
       headerRow.eachCell(cell => {
         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEEEEEE' } };
-        // *** CORRECCIÓN DE TIPEO: argb en lugar de argB ***
         cell.border = { bottom: { style: 'thin', color: { argb: 'FF000000' } } };
       });
+
       data.forEach(row => {
-        const numericValue = parseFloat(String(row.value).replace(',', '.')); // Convertir string a número
-        const dataRow = worksheet.addRow([
-            row.nutrient,
-            isNaN(numericValue) ? row.value : numericValue,
-            row.unit
-        ]);
-        const valueCell = dataRow.getCell(2);
-        valueCell.numFmt = '0.00';
-        valueCell.alignment = { horizontal: 'right' };
+        const numericValue = parseFloat(String(row.value).replace(',', '.'));
+        const dataRow = worksheet.addRow([row.nutrient, isNaN(numericValue) ? row.value : numericValue, row.unit]);
+        dataRow.getCell(2).numFmt = '0.00';
+        dataRow.getCell(2).alignment = { horizontal: 'right' };
       });
-      worksheet.getColumn('A').width = 30;
-      worksheet.getColumn('B').width = 15;
-      worksheet.getColumn('C').width = 12;
+      worksheet.getColumn('A').width = 30; worksheet.getColumn('B').width = 15; worksheet.getColumn('C').width = 12;
       await workbook.xlsx.writeFile(filePath);
     }
-    console.log('Report exported successfully.');
     return 'Report exported successfully.';
-  } catch (error: any) {
-    console.error('Error exporting report:', error);
-    return `Error exporting report: ${error.message}`;
-  }
+  } catch (error: any) { return `Error exporting report: ${error.message}`; }
 });
 
-// --- NUEVOS Manejadores de Análisis (v0.3) ---
+// ============================================================================
+//REGION: IPC HANDLERS - RDI & CONFIGURATION
+// ============================================================================
 
-// (Función auxiliar 'getBaseAnalyticsData'...)
-async function getBaseAnalyticsData(
-    userIds: string[], 
-    startDate: string, 
-    endDate: string, 
-    referenceDbId: number, 
-    nutrient: string // El nombre de la columna, ej: "Energy_kcal"
-): Promise<{ [userId: string]: { [date: string]: number } }> {
+ipcMain.handle('get-rdi-profiles', async (): Promise<{ ProfileID: number, ProfileName: string }[]> => {
     return new Promise((resolve, reject) => {
-        // Validar el nombre del nutriente para evitar Inyección SQL
-        const allowedNutrients = [
-            'Energy_kcal', 'Water_g', 'Protein_g', 'Fat_g', 'Carbohydrate_g',
-            'SaturatedFat_g', 'MonounsaturatedFat_g', 'PolyunsaturatedFat_g', 'Cholesterol_mg',
-            'Fiber_g', 'Sugar_g', 'Ash_g', 'Calcium_mg', 'Phosphorus_mg', 'Iron_mg', 'Sodium_mg',
-            'Potassium_mg', 'Magnesium_mg', 'Zinc_mg', 'Copper_mg', 'Manganese_mg',
-            'VitaminA_ER', 'Thiamin_mg', 'Riboflavin_mg', 'Niacin_mg',
-            'PantothenicAcid_mg', 'VitaminB6_mg', 'Folate_mcg', 'VitaminB12_mcg', 'VitaminC_mg'
-        ];
-        if (!allowedNutrients.includes(nutrient)) {
-            return reject(new Error(`Invalid nutrient column name: ${nutrient}`));
-        }
-        
-        const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err: Error | null) => {
-            if (err) return reject(`Database connection error: ${err.message}`);
-        });
-
-        // Crear placeholders (?) para el array de UserIDs
-        const placeholders = userIds.map(() => '?').join(',');
-
-        // Consulta que calcula el total de un nutriente, por usuario, por día
-        const query = `
-            SELECT 
-                cl.UserID, 
-                cl.ConsumptionDate, 
-                SUM(f.${nutrient} * (cl.Grams / 100.0)) AS DailyTotal
-            FROM ConsumptionLog cl
-            JOIN Foods f ON cl.FoodID = f.FoodID
-            WHERE 
-                cl.UserID IN (${placeholders})
-                AND cl.ConsumptionDate BETWEEN ? AND ?
-                AND cl.ReferenceDatabaseID = ?
-                AND f.${nutrient} IS NOT NULL
-            GROUP BY cl.UserID, cl.ConsumptionDate
-        `;
-
-        const params = [...userIds, startDate, endDate, referenceDbId];
-
-        db.all(query, params, (err: Error | null, rows: { UserID: string, ConsumptionDate: string, DailyTotal: number }[]) => {
+        const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => err ? reject(err) : null);
+        db.all('SELECT ProfileID, ProfileName FROM RDIProfiles ORDER BY ProfileName ASC', [], (err, rows: any[]) => {
             db.close();
-            if (err) {
-                return reject(new Error(`Failed to execute analytics query: ${err.message}`));
-            }
-            
-            // Re-estructurar los datos en un mapa para fácil acceso: { UserA: { '2025-10-29': 1500, ... }, ... }
-            const results: { [userId: string]: { [date: string]: number } } = {};
-            for (const row of rows) {
-                if (!results[row.UserID]) {
-                    results[row.UserID] = {};
-                }
-                results[row.UserID][row.ConsumptionDate] = row.DailyTotal;
-            }
-            resolve(results);
+            err ? reject(err) : resolve(rows);
         });
     });
-}
+});
 
-// 1. ANÁLISIS EPIDEMIOLÓGICO (ESTADÍSTICAS DE GRUPO)
-ipcMain.handle('get-statistical-report', async (
-    event,
-    userIds: string[], 
-    startDate: string, 
-    endDate: string, 
-    referenceDbId: number, 
-    nutrient: string
-): Promise<IStatisticalReport> => {
-    
-    // 1. Obtener los datos base (totales por día por usuario)
-    const dailyDataByUser = await getBaseAnalyticsData(userIds, startDate, endDate, referenceDbId, nutrient);
-    
-    // 2. Calcular el promedio *diario* para cada usuario
-    const userAverages: number[] = [];
-    for (const userId of Object.keys(dailyDataByUser)) {
-        const dates = Object.keys(dailyDataByUser[userId]);
-        if (dates.length > 0) {
-            const totalsPerDay = Object.values(dailyDataByUser[userId]);
-            const userTotal = totalsPerDay.reduce((sum, val) => sum + val, 0);
-            userAverages.push(userTotal / dates.length); // Promedio diario de este usuario
-        }
-    }
+ipcMain.handle('create-rdi-profile', async (event, profileName: string): Promise<string> => {
+    return new Promise((resolve, reject) => {
+        const trimmed = profileName?.trim();
+        if (!trimmed) return reject("Name required.");
+        const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, (err) => err ? reject(err) : null);
+        db.run('INSERT INTO RDIProfiles (ProfileName) VALUES (?)', [trimmed], function(err) {
+            db.close();
+            if (err) reject(err.message.includes('UNIQUE') ? "Profile exists." : err.message);
+            else resolve("Profile created.");
+        });
+    });
+});
 
-    if (userAverages.length === 0) {
-        throw new Error("No data found for the selected criteria to calculate statistics.");
-    }
+ipcMain.handle('delete-rdi-profile', async (event, profileId: number): Promise<string> => {
+    return new Promise((resolve, reject) => {
+        if (profileId === 1) return reject('Cannot delete Default Profile.');
+        if (!profileId || profileId <= 0) return reject('Invalid ID.');
+        const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, (err) => err ? reject(err) : null);
+        db.run('PRAGMA foreign_keys = ON;', () => {
+            db.run('DELETE FROM RDIProfiles WHERE ProfileID = ?', [profileId], function(err) {
+                db.close();
+                if (err) reject(err.message);
+                else if (this.changes === 0) reject(`ID ${profileId} not found.`);
+                else resolve('Profile deleted.');
+            });
+        });
+    });
+});
 
-    // 3. Calcular estadísticas sobre la lista de promedios de usuario
-    const report: IStatisticalReport = {
-        count: userAverages.length,
-        mean: ss.mean(userAverages),
-        median: ss.median(userAverages),
-        stdDev: ss.standardDeviation(userAverages),
-        variance: ss.variance(userAverages),
-        min: ss.min(userAverages),
-        max: ss.max(userAverages),
-        q1: ss.quantile(userAverages, 0.25),
-        q3: ss.quantile(userAverages, 0.75),
-        rawData: userAverages // Enviar los promedios de cada usuario para el histograma/box plot
+ipcMain.handle('import-rdi-excel', async (event, profileId: number): Promise<string> => {
+    if (!profileId) return "Invalid ID.";
+    const result = await dialog.showOpenDialog({ title: 'Import RDI', filters: [{ name: 'Excel', extensions: ['xlsx'] }], properties: ['openFile'] });
+    if (result.canceled || !result.filePaths.length) return "Cancelled.";
+
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.readFile(result.filePaths[0]);
+    const worksheet = workbook.worksheets[0];
+    if (!worksheet) return "No worksheet.";
+
+    let importedCount = 0;
+    const nutrientMap: { [key: string]: string } = {
+        'calorias': 'Energy_kcal', 'energia': 'Energy_kcal', 'energy': 'Energy_kcal',
+        'proteina': 'Protein_g', 'protein': 'Protein_g', 'grasa': 'Fat_g', 'lipidos': 'Fat_g', 'fat': 'Fat_g',
+        'carbohidratos': 'Carbohydrate_g', 'cho': 'Carbohydrate_g', 'fibra': 'Fiber_g', 'azucar': 'Sugar_g',
+        'calcio': 'Calcium_mg', 'hierro': 'Iron_mg', 'sodio': 'Sodium_mg', 'vitamina c': 'VitaminC_mg',
+        'vitamina a': 'VitaminA_ER', 'vitamina b12': 'VitaminB12_mcg', 'folato': 'Folate_mcg',
+        'zinc': 'Zinc_mg', 'magnesio': 'Magnesium_mg', 'potasio': 'Potassium_mg'
     };
 
-    console.log("Generated Statistical Report:", report);
-    return report;
-});
-
-// 2. ANÁLISIS NUTRICIONAL (GRÁFICO DE LÍNEA)
-ipcMain.handle('get-daily-intake-over-time', async (
-    event,
-    userId: string, 
-    startDate: string, 
-    endDate: string, 
-    referenceDbId: number, 
-    nutrient: string
-): Promise<IDailyIntake[]> => {
-
-    // 1. Obtener los datos base. Nota: getBaseAnalyticsData espera un array de UserIDs.
-    const dailyDataByUser = await getBaseAnalyticsData([userId], startDate, endDate, referenceDbId, nutrient);
-
-    const userData = dailyDataByUser[userId];
-    if (!userData) {
-        return []; // Sin datos para este usuario
-    }
-
-    // 2. Convertir el mapa de datos a un array de {date, value}
-    const results: IDailyIntake[] = Object.keys(userData).map(date => {
-        return {
-            date: date,
-            value: userData[date]
-        };
-    });
-
-    // 3. Ordenar por fecha
-    results.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-
-    console.log("Generated Daily Intake Over Time:", results);
-    return results;
-});
-
-// 3. ANÁLISIS NUTRICIONAL (GRÁFICO DE PASTEL - ALIMENTOS)
-ipcMain.handle('get-nutrient-contribution', async (
-    event,
-    userId: string, 
-    startDate: string, 
-    endDate: string, 
-    referenceDbId: number, 
-    nutrient: string
-): Promise<IContributionReport[]> => {
-    
-    // Validar el nombre del nutriente para evitar Inyección SQL
-    const allowedNutrients = [
-        'Energy_kcal', 'Water_g', 'Protein_g', 'Fat_g', 'Carbohydrate_g',
-        'SaturatedFat_g', 'MonounsaturatedFat_g', 'PolyunsaturatedFat_g', 'Cholesterol_mg',
-        'Fiber_g', 'Sugar_g', 'Ash_g', 'Calcium_mg', 'Phosphorus_mg', 'Iron_mg', 'Sodium_mg',
-        'Potassium_mg', 'Magnesium_mg', 'Zinc_mg', 'Copper_mg', 'Manganese_mg',
-        'VitaminA_ER', 'Thiamin_mg', 'Riboflavin_mg', 'Niacin_mg',
-        'PantothenicAcid_mg', 'VitaminB6_mg', 'Folate_mcg', 'VitaminB12_mcg', 'VitaminC_mg'
-    ];
-    if (!allowedNutrients.includes(nutrient)) {
-        return Promise.reject(new Error(`Invalid nutrient column name: ${nutrient}`));
-    }
-
     return new Promise((resolve, reject) => {
-        const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err: Error | null) => {
-            if (err) return reject(`Database connection error: ${err.message}`);
-        });
+        const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE);
+        db.serialize(() => {
+            db.run('BEGIN TRANSACTION');
+            db.run('DELETE FROM RDIValues WHERE ProfileID = ?', [profileId]);
+            const stmt = db.prepare('INSERT INTO RDIValues (ProfileID, NutrientKey, RecommendedValue, Type) VALUES (?, ?, ?, ?)');
 
-        // Consulta que agrupa por nombre de alimento y suma el nutriente
-        const query = `
-            SELECT 
-                f.Name AS name, 
-                SUM(f.${nutrient} * (cl.Grams / 100.0)) AS value
-            FROM ConsumptionLog cl
-            JOIN Foods f ON cl.FoodID = f.FoodID
-            WHERE 
-                cl.UserID = ?
-                AND cl.ConsumptionDate BETWEEN ? AND ?
-                AND cl.ReferenceDatabaseID = ?
-                AND f.${nutrient} IS NOT NULL
-            GROUP BY f.Name
-            ORDER BY value DESC
-        `;
+            worksheet.eachRow((row, rowNumber) => {
+                if (rowNumber === 1) return;
+                let nutrientName = row.getCell(1).value?.toString().trim().toLowerCase() || '';
+                let value = row.getCell(2).value;
+                let typeRaw = row.getCell(3).value?.toString().trim().toUpperCase();
+                
+                let type = 'RDA'; 
+                if (typeRaw) {
+                    if (['RDA', 'EAR', 'AI', 'UL', 'AMDR_MIN', 'AMDR_MAX'].includes(typeRaw)) type = typeRaw;
+                    else if (typeRaw.includes('MAX') || typeRaw.includes('UL')) type = 'UL';
+                    else if (typeRaw.includes('PROMEDIO') || typeRaw.includes('EAR')) type = 'EAR';
+                }
 
-        db.all(query, [userId, startDate, endDate, referenceDbId], (err: Error | null, rows: IContributionReport[]) => {
-            db.close();
-            if (err) {
-                return reject(new Error(`Failed to get nutrient contribution: ${err.message}`));
-            }
-            // Devolver solo valores positivos
-            resolve(rows.filter(r => r.value > 0));
+                let dbKey = nutrientMap[nutrientName] || nutrientColumnNames.find(n => n.toLowerCase() === nutrientName);
+                if (dbKey && value) {
+                    const numValue = parseFloat(value.toString().replace(',', '.'));
+                    if (!isNaN(numValue)) {
+                        stmt.run([profileId, dbKey, numValue, type], (err: Error) => { if (!err) importedCount++; });
+                    }
+                }
+            });
+
+            stmt.finalize();
+            db.run('COMMIT', (err) => {
+                db.close();
+                if (err) reject(err.message); else resolve(`Imported ${importedCount} values.`);
+            });
         });
     });
 });
 
-// 4. ANÁLISIS NUTRICIONAL (GRÁFICO DE PASTEL - COMIDAS)
-ipcMain.handle('get-meal-contribution', async (
-    event,
-    userId: string, 
-    startDate: string, 
-    endDate: string, 
-    referenceDbId: number, 
-    nutrient: string
-): Promise<IContributionReport[]> => {
+ipcMain.handle('get-adequacy-report', async (event, userId: string, startDate: string, endDate: string, referenceDbId: number, profileId: number = 1) => {
+    const intakeTotals = await calculateIntakeInternal(userId, startDate, endDate, referenceDbId);
+    const dayCount = Math.max(1, (new Date(endDate).getTime() - new Date(startDate).getTime()) / (1000 * 3600 * 24) + 1);
 
-    // Validar nutriente
-    const allowedNutrients = [
-        'Energy_kcal', 'Water_g', 'Protein_g', 'Fat_g', 'Carbohydrate_g',
-        'SaturatedFat_g', 'MonounsaturatedFat_g', 'PolyunsaturatedFat_g', 'Cholesterol_mg',
-        'Fiber_g', 'Sugar_g', 'Ash_g', 'Calcium_mg', 'Phosphorus_mg', 'Iron_mg', 'Sodium_mg',
-        'Potassium_mg', 'Magnesium_mg', 'Zinc_mg', 'Copper_mg', 'Manganese_mg',
-        'VitaminA_ER', 'Thiamin_mg', 'Riboflavin_mg', 'Niacin_mg',
-        'PantothenicAcid_mg', 'VitaminB6_mg', 'Folate_mcg', 'VitaminB12_mcg', 'VitaminC_mg'
-    ];
-    if (!allowedNutrients.includes(nutrient)) {
-        return Promise.reject(new Error(`Invalid nutrient column name: ${nutrient}`));
+    const db: Database = await new Promise((resolve, reject) => {
+        const dbInstance = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => err ? reject(err) : resolve(dbInstance));
+    });
+
+    const allValues: any[] = await new Promise((resolve, reject) => {
+        db.all(`SELECT NutrientKey, RecommendedValue, Type FROM RDIValues WHERE ProfileID = ?`, [profileId], (err, rows) => err ? reject(err) : resolve(rows));
+    });
+    db.close();
+
+    const valuesByNutrient: { [key: string]: { [type: string]: number } } = {};
+    allValues.forEach(v => {
+        if (!valuesByNutrient[v.NutrientKey]) valuesByNutrient[v.NutrientKey] = {};
+        valuesByNutrient[v.NutrientKey][v.Type] = v.RecommendedValue;
+    });
+
+    const report: any[] = [];
+    for (const nutrientKey in valuesByNutrient) {
+        const standards = valuesByNutrient[nutrientKey];
+        let targetValue = standards['RDA'] || standards['AI'] || standards['EAR'];
+        let targetType = standards['RDA'] ? 'RDA' : (standards['AI'] ? 'AI' : 'EAR');
+
+        if (targetValue) {
+            const totalKey = `total${nutrientKey}` as keyof INutrientTotals;
+            const dailyAverageIntake = (intakeTotals[totalKey] || 0) / dayCount;
+            report.push({
+                nutrient: nutrientKey, intake: dailyAverageIntake, rdi: targetValue,
+                percentage: (dailyAverageIntake / targetValue) * 100, type: targetType
+            });
+        }
     }
+    return report.sort((a, b) => b.percentage - a.percentage);
+});
 
+ipcMain.handle('calculate-intake', async (event, userId, startDate, endDate, referenceDbId) => {
+    return await calculateIntakeInternal(userId, startDate, endDate, referenceDbId);
+});
+
+// ============================================================================
+//REGION: IPC HANDLERS - SUBJECTS & DEMOGRAPHICS
+// ============================================================================
+
+ipcMain.handle('get-subjects', async (): Promise<any[]> => {
     return new Promise((resolve, reject) => {
-        const db: Database = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err: Error | null) => {
-            if (err) return reject(`Database connection error: ${err.message}`);
-        });
-
-        // Consulta que agrupa por tipo de comida
-        const query = `
-            SELECT 
-                -- 1. Formatear la salida: Poner la primera letra en mayúscula y el resto en minúscula
-                UPPER(SUBSTR(COALESCE(cl.MealType, 'Uncategorized'), 1, 1)) || LOWER(SUBSTR(COALESCE(cl.MealType, 'Uncategorized'), 2)) AS name, 
-                SUM(f.${nutrient} * (cl.Grams / 100.0)) AS value
-            FROM ConsumptionLog cl
-            JOIN Foods f ON cl.FoodID = f.FoodID
-            WHERE 
-                cl.UserID = ?
-                AND cl.ConsumptionDate BETWEEN ? AND ?
-                AND cl.ReferenceDatabaseID = ?
-                AND f.${nutrient} IS NOT NULL
-            -- 2. Agrupar por el valor en minúscula (así "Lunch" y "lunch" se unen)
-            GROUP BY LOWER(COALESCE(cl.MealType, 'Uncategorized'))
-            ORDER BY value DESC
-        `;
-
-        db.all(query, [userId, startDate, endDate, referenceDbId], (err: Error | null, rows: IContributionReport[]) => {
+        const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, err => err ? reject(err) : null);
+        db.all('SELECT * FROM SubjectProfiles ORDER BY UserID ASC', [], (err, rows) => {
             db.close();
-            if (err) {
-                return reject(new Error(`Failed to get meal contribution: ${err.message}`));
-            }
-            resolve(rows.filter(r => r.value > 0));
+            err ? reject(err) : resolve(rows);
         });
     });
 });
 
+ipcMain.handle('get-subject-by-id', async (event, userId: string): Promise<any> => {
+    return new Promise((resolve, reject) => {
+        const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, err => err ? reject(err) : null);
+        db.get('SELECT * FROM SubjectProfiles WHERE UserID = ?', [userId], (err, row) => {
+            db.close();
+            if (err) reject(err.message); else resolve(row || null);
+        });
+    });
+});
 
-// --- Diálogos Asíncronos (v0.2) ---
-ipcMain.handle('show-confirm-dialog', async (event, options: Electron.MessageBoxOptions): Promise<Electron.MessageBoxReturnValue> => {
+ipcMain.handle('save-subject', async (event, subjectData: any): Promise<string> => {
+    console.log('[Main] save-subject:', subjectData);
+    return new Promise((resolve, reject) => {
+        const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, err => { if (err) console.error(err.message); });
+        const { UserID, Name, BirthDate, Gender, PhysioState, Weight_kg, Height_cm, Notes } = subjectData;
+        const recordDate = new Date().toISOString().split('T')[0];
+
+        if (!UserID) { db.close(); return reject("UserID required."); }
+
+        db.serialize(() => {
+            db.run('BEGIN TRANSACTION');
+            const upsertProfile = `
+                INSERT INTO SubjectProfiles (UserID, Name, BirthDate, Gender, PhysioState, Weight_kg, Height_cm, Notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(UserID) DO UPDATE SET
+                    Name=excluded.Name, BirthDate=excluded.BirthDate, Gender=excluded.Gender,
+                    PhysioState=excluded.PhysioState, Weight_kg=excluded.Weight_kg,
+                    Height_cm=excluded.Height_cm, Notes=excluded.Notes;
+            `;
+            db.run(upsertProfile, [UserID, Name, BirthDate, Gender, PhysioState, Weight_kg, Height_cm, Notes]);
+
+            const hasWeight = (Weight_kg !== null && Weight_kg !== undefined && Weight_kg !== '');
+            const hasHeight = (Height_cm !== null && Height_cm !== undefined && Height_cm !== '');
+            
+            if (hasWeight || hasHeight || (PhysioState && PhysioState !== 'None')) {
+                db.run(`INSERT INTO SubjectMeasurements (UserID, Date, Weight_kg, Height_cm, PhysioState, Notes) VALUES (?, ?, ?, ?, ?, ?)`,
+                    [UserID, recordDate, hasWeight ? Weight_kg : null, hasHeight ? Height_cm : null, PhysioState, Notes]
+                );
+            }
+
+            db.run('COMMIT', (err) => {
+                db.close();
+                if (err) reject(err.message); else resolve(`Subject saved.`);
+            });
+        });
+    });
+});
+
+ipcMain.handle('delete-subject', async (event, userId: string): Promise<string> => {
+    return new Promise((resolve, reject) => {
+        const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, err => err ? reject(err) : null);
+        db.run('DELETE FROM SubjectProfiles WHERE UserID = ?', [userId], function(err) {
+            db.close();
+            if (err) reject(err.message); else resolve("Subject deleted.");
+        });
+    });
+});
+
+ipcMain.handle('get-subject-history', async (event, userId: string): Promise<any[]> => {
+    return new Promise((resolve, reject) => {
+        const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, err => err ? reject(err) : null);
+        db.all('SELECT * FROM SubjectMeasurements WHERE UserID = ? ORDER BY Date ASC', [userId], (err, rows) => {
+            db.close();
+            if (err) reject(err.message); else resolve(rows);
+        });
+    });
+});
+
+ipcMain.handle('delete-measurement', async (event, measurementId: number): Promise<string> => {
+    return new Promise((resolve, reject) => {
+        if (!measurementId) return reject("Invalid ID.");
+        const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, err => err ? reject(err) : null);
+        db.run('DELETE FROM SubjectMeasurements WHERE MeasurementID = ?', [measurementId], function(err) {
+            db.close();
+            if (err) reject(err.message); else resolve("Deleted.");
+        });
+    });
+});
+
+ipcMain.handle('update-measurement', async (event, mId: number, weight: number, height: number): Promise<string> => {
+    return new Promise((resolve, reject) => {
+        const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE, err => err ? reject(err) : null);
+        db.run('UPDATE SubjectMeasurements SET Weight_kg = ?, Height_cm = ? WHERE MeasurementID = ?', [weight, height, mId], function(err) {
+            db.close();
+            if (err) reject(err.message); else resolve("Updated.");
+        });
+    });
+});
+
+// ============================================================================
+//REGION: SYSTEM DIALOGS
+// ============================================================================
+
+ipcMain.handle('show-confirm-dialog', async (event, options: Electron.MessageBoxOptions) => {
     const window = BrowserWindow.getFocusedWindow();
-    if (window) {
-        return dialog.showMessageBox(window, options);
-    }
-    return dialog.showMessageBox(options);
+    return window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options);
 });
 
 ipcMain.handle('show-error-dialog', async (event, title: string, content: string) => {
     const window = BrowserWindow.getFocusedWindow();
-    const options: Electron.MessageBoxOptions = {
-        type: 'error',
-        title: title,
-        message: content
-    };
-    if (window) {
-        return dialog.showMessageBox(window, options);
-    }
-    return dialog.showMessageBox(options);
+    const options: Electron.MessageBoxOptions = { type: 'error', title, message: content };
+    return window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options);
 });
 
 ipcMain.handle('show-info-dialog', async (event, title: string, content: string) => {
     const window = BrowserWindow.getFocusedWindow();
-    const options: Electron.MessageBoxOptions = {
-        type: 'info',
-        title: title,
-        message: content
-    };
-    if (window) {
-        return dialog.showMessageBox(window, options);
-    }
-    return dialog.showMessageBox(options);
+    const options: Electron.MessageBoxOptions = { type: 'info', title, message: content };
+    return window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options);
 });
