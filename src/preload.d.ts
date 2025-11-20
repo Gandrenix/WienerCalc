@@ -1,4 +1,6 @@
-// --- src/preload.d.ts ---
+// ==========================================
+// BASE ENTITIES & SEARCH
+// ==========================================
 
 // Interface for basic database info
 export interface IDatabaseInfo {
@@ -6,38 +8,17 @@ export interface IDatabaseInfo {
   DatabaseName: string;
 }
 
-// Interface for food search results (simplified)
+// Interface for food search results
 export interface ISearchFoodResult {
   FoodID: number;
   Name: string;
-  // *** AÑADE ESTAS DOS LÍNEAS ***
   FoodType: 'simple' | 'recipe';
   RecipeYieldGrams: number | null;
 }
 
-// Interface for a complete log entry (data received FROM main process)
-export interface ILogEntry {
-  LogID: number;
-  UserID: string;
-  ConsumptionDate: string; // YYYY-MM-DD
-  MealType?: string; // Optional (will be undefined if null in DB)
-  FoodID: number;
-  FoodName: string; // Joined from Foods table
-  ReferenceDatabaseID: number;
-  ReferenceDatabaseName: string; // Joined from FoodDatabases table
-  Grams: number;
-  Timestamp: string; // ISO format string
-}
-
-// Interface for data sent TO main process when adding a new log entry
-export interface INewLogEntryData {
-  userId: string;
-  consumptionDate: string; // YYYY-MM-DD
-  mealType?: string; // Optional
-  foodId: number;
-  referenceDatabaseId: number;
-  grams: number;
-}
+// ==========================================
+// FOOD & RECIPES
+// ==========================================
 
 export interface IRecipeIngredient {
   foodId: number;
@@ -45,27 +26,30 @@ export interface IRecipeIngredient {
   grams: number;
 }
 
-// Interface for FULL food details (sent TO main process for updating)
-// *** ACTUALIZADA CON CAMPOS DE "TABLA PAISA" ***
+// Interface for FULL food details (Actualizada con campos de "Tabla Paisa")
 export interface IFoodDetails {
   FoodID: number; // Required to identify which food to update
-  Name: string; // Required new name
+  Name: string;   // Required new name
   FoodType?: 'simple' | 'recipe';
   Ingredients?: IRecipeIngredient[]; // Array de ingredientes
+
   // Macros & Energía
   Energy_kcal?: number | null;
   Water_g?: number | null;
   Protein_g?: number | null;
   Fat_g?: number | null; // Grasa Total
   Carbohydrate_g?: number | null;
+
   // Sub-componentes de Grasa
   SaturatedFat_g?: number | null;
   MonounsaturatedFat_g?: number | null;
   PolyunsaturatedFat_g?: number | null;
   Cholesterol_mg?: number | null;
+
   // Sub-componentes de Carbohidratos
   Fiber_g?: number | null;
   Sugar_g?: number | null;
+
   // Minerales
   Ash_g?: number | null;
   Calcium_mg?: number | null;
@@ -77,6 +61,7 @@ export interface IFoodDetails {
   Zinc_mg?: number | null;
   Copper_mg?: number | null;
   Manganese_mg?: number | null;
+
   // Vitaminas
   VitaminA_ER?: number | null;
   Thiamin_mg?: number | null;
@@ -89,8 +74,45 @@ export interface IFoodDetails {
   VitaminC_mg?: number | null;
 }
 
-// Interface for Nutrient Totals Result (data received FROM main process)
-// *** ACTUALIZADA CON CAMPOS DE "TABLA PAISA" ***
+// ==========================================
+// LOGS & CONSUMPTION ENTITIES
+// ==========================================
+
+// Interface for a complete log entry (data received FROM main process)
+export interface ILogEntry {
+  LogID: number;
+  UserID: string;
+  ConsumptionDate: string; // YYYY-MM-DD
+  MealType?: string;       // Optional (will be undefined if null in DB)
+  FoodID: number;
+  FoodName: string;        // Joined from Foods table
+  ReferenceDatabaseID: number;
+  ReferenceDatabaseName: string; // Joined from FoodDatabases table
+  Grams: number;
+  Timestamp: string;       // ISO format string
+}
+
+// Interface for data sent TO main process when adding a new log entry
+export interface INewLogEntryData {
+  userId: string;
+  consumptionDate: string; // YYYY-MM-DD
+  mealType?: string;       // Optional
+  foodId: number;
+  referenceDatabaseId: number;
+  grams: number;
+}
+
+export interface IDailyIntake {
+  date: string;
+  value: number;
+  userId?: string; // Útil para el frontend
+}
+
+// ==========================================
+// REPORTS & ANALYSIS ENTITIES
+// ==========================================
+
+// Interface for Nutrient Totals Result (Actualizada con campos de "Tabla Paisa")
 export interface INutrientTotals {
   [key: string]: number; // Permite acceso dinámico
   totalEnergy_kcal: number;
@@ -125,78 +147,93 @@ export interface INutrientTotals {
   totalVitaminC_mg: number;
 }
 
-// *** Interfaz para los datos del reporte formateados ***
+// Interfaz para los datos del reporte formateados
 export interface IReportRow {
   nutrient: string; // ej. "Energy Kcal"
   value: string;    // ej. "106.80"
   unit: string;     // ej. "kcal"
 }
 
-// *** NUEVO: Interfaces para Análisis Estadístico (v0.3) ***
+// Interfaces para Análisis Estadístico
 export interface IStatisticalReport {
-    count: number;
-    mean: number;
-    median: number;
-    stdDev: number;
-    variance: number;
-    min: number;
-    max: number;
-    q1: number; // Percentil 25 (para IQR y Box Plot)
-    q3: number; // Percentil 75 (para IQR y Box Plot)
-    rawData: number[]; // Para el Histograma
+  count: number;
+  mean: number;
+  median: number;
+  stdDev: number;
+  variance: number;
+  min: number;
+  max: number;
+  q1: number; // Percentil 25 (para IQR y Box Plot)
+  q3: number; // Percentil 75 (para IQR y Box Plot)
+  rawData: number[]; // Para el Histograma
 }
 
 export interface IContributionReport {
-    name: string;
-    value: number;
-}
-
-export interface IDailyIntake {
-    date: string;
-    value: number;
-    userId?: string; // <-- AÑADE ESTA LÍNEA (útil para el frontend)
+  name: string;
+  value: number;
 }
 
 
-// --- Define the API exposed by preload.ts ---
+// ==========================================
+// MAIN API INTERFACE
+// ==========================================
+
+// Define the API exposed by preload.ts
 export interface IElectronAPI {
-  // Library Management
-  addFood: (foodName: string, databaseId: number) => Promise<string>;
-  getFoods: () => Promise<{ FoodID: number; Name: string; DatabaseName: string }[]>;
-  getFoodDetails: (foodId: number) => Promise<IFoodDetails | null>;
-  getRecipeIngredients: (foodId: number) => Promise<IRecipeIngredient[]>;
-  updateFoodDetails: (foodData: IFoodDetails) => Promise<string>;
-  updateFoodDetails: (foodData: IFoodDetails) => Promise<string>;
-  deleteFood: (foodId: number) => Promise<string>;
-  importExcel: (databaseId: number) => Promise<string>;
-  importCSV: (databaseId: number) => Promise<string>;
+
+  // --- Library & Database Management ---
   getDatabases: () => Promise<IDatabaseInfo[]>;
   addDatabase: (dbName: string) => Promise<string>;
   deleteDatabase: (databaseId: number) => Promise<string>;
+  
+  getFoods: () => Promise<{ FoodID: number; Name: string; DatabaseName: string }[]>;
+  addFood: (foodName: string, databaseId: number) => Promise<string>;
+  getFoodDetails: (foodId: number) => Promise<IFoodDetails | null>;
+  updateFoodDetails: (foodData: IFoodDetails) => Promise<string>; // Unificado (estaba duplicado)
+  deleteFood: (foodId: number) => Promise<string>;
   purgeFoodLibrary: (databaseId: number) => Promise<string>;
-  deleteLogsForUser: (userId: string) => Promise<string>;
-  deleteAllLogs: () => Promise<string>;
-  getAllLogs: () => Promise<ILogEntry[]>; // <-- AÑADE ESTA LÍNEA
+  
+  getRecipeIngredients: (foodId: number) => Promise<IRecipeIngredient[]>;
+  
+  importExcel: (databaseId: number) => Promise<string>;
+  importCSV: (databaseId: number) => Promise<string>;
 
 
-  // Consumption Log
+  // --- Subject (User) & RDI Management ---
+  getSubjects: () => Promise<any[]>;
+  getSubjectById: (userId: string) => Promise<any>;
+  saveSubject: (data: any) => Promise<string>;
+  deleteSubject: (userId: string) => Promise<string>;
+  
+  getSubjectHistory: (userId: string) => Promise<any[]>;
+  updateMeasurement: (id: number, weight: number, height: number) => Promise<string>;
+  deleteMeasurement: (measurementId: number) => Promise<string>;
+
+  getRdiProfiles: () => Promise<{ ProfileID: number, ProfileName: string }[]>;
+  createRdiProfile: (name: string) => Promise<string>;
+  importRdiExcel: (profileId: number) => Promise<string>;
+  deleteRdiProfile: (profileId: number) => Promise<string>;
+
+
+  // --- Consumption Log ---
   searchFoods: (searchTerm: string, referenceDbId: number) => Promise<ISearchFoodResult[]>;
   searchAllFoods: (searchTerm: string) => Promise<ISearchFoodResult[]>;
+  
   addLogEntry: (logData: INewLogEntryData) => Promise<string>;
   getLogEntries: (userId: string, date: string) => Promise<ILogEntry[]>;
-  deleteLogEntry: (logId: number) => Promise<string>;
+  getAllLogs: () => Promise<ILogEntry[]>;
   editLogEntry: (logId: number, newGrams: number) => Promise<string>;
-  importConsumptionLog: () => Promise<{ message: string, firstEntry?: { userId: string, date: string } }>;
+  deleteLogEntry: (logId: number) => Promise<string>;
   
-  // *** NUEVO: Importar Log desde CSV ***
+  importConsumptionLog: () => Promise<{ message: string, firstEntry?: { userId: string, date: string } }>;
   importConsumptionLogCsv: () => Promise<{ message: string, firstEntry?: { userId: string, date: string } }>;
   
-  getUniqueUserIds: () => Promise<string[]>;
-
   deleteLogsForUser: (userId: string) => Promise<string>;
   deleteAllLogs: () => Promise<string>;
+  getUniqueUserIds: () => Promise<string[]>;
 
-  // Calculation Function (v0.2)
+
+  // --- Analysis & Calculations ---
   calculateIntake: (
     userId: string,
     startDate: string,
@@ -204,14 +241,14 @@ export interface IElectronAPI {
     referenceDbId: number
   ) => Promise<INutrientTotals>;
 
-  // Exportar Reporte (v0.2)
-  exportReport: (
-    reportTitle: string,
-    data: IReportRow[],
-    format: 'csv' | 'xlsx'
-  ) => Promise<string>;
+  getAdequacyReport: (
+    userId: string,
+    startDate: string,
+    endDate: string,
+    referenceDbId: number,
+    profileId?: number
+  ) => Promise<{ nutrient: string, intake: number, rdi: number, percentage: number, type: string }[]>;
 
-  // Análisis (v0.3)
   getStatisticalReport: (
     userIds: string[], 
     startDate: string, 
@@ -221,13 +258,12 @@ export interface IElectronAPI {
   ) => Promise<IStatisticalReport>;
 
   getDailyIntakeOverTime: (
-    userIds: string[], // <-- Cambiado a array
+    userIds: string[], 
     startDate: string,
     endDate: string,
     referenceDbId: number,
     nutrient: string
-// EL RETORNO CAMBIA a un Array de Arrays
-) => Promise<IDailyIntake[][]>;
+  ) => Promise<IDailyIntake[][]>; // Array de Arrays
   
   getNutrientContribution: (
     userId: string, 
@@ -245,42 +281,28 @@ export interface IElectronAPI {
     nutrient: string
   ) => Promise<IContributionReport[]>;
 
-  // Firmas para Diálogos Asíncronos
+
+  // --- Exports ---
+  exportReport: (
+    reportTitle: string,
+    data: IReportRow[],
+    format: 'csv' | 'xlsx'
+  ) => Promise<string>;
+
+
+  // --- System & UI Dialogs ---
   showConfirmDialog: (options: Electron.MessageBoxOptions) => Promise<Electron.MessageBoxReturnValue>;
   showErrorDialog: (title: string, content: string) => Promise<Electron.MessageBoxReturnValue>;
   showInfoDialog: (title: string, content: string) => Promise<Electron.MessageBoxReturnValue>;
-
-
-getAdequacyReport: (
-    userId: string,
-    startDate: string,
-    endDate: string,
-    referenceDbId: number,
-    profileId?: number
-) => Promise<{ nutrient: string, intake: number, rdi: number, percentage: number, type:string, }[]>;
-
-
-getRdiProfiles: () => Promise<{ ProfileID: number, ProfileName: string }[]>;
-createRdiProfile: (name: string) => Promise<string>;
-importRdiExcel: (profileId: number) => Promise<string>;
-
-
 }
 
+// ==========================================
+// GLOBAL WINDOW EXTENSION
+// ==========================================
 
-
-
-
-
-
-
-
-
-
-// --- Extend the Window interface ---
 // Augment the global Window interface
 declare global {
-    interface Window {
-        electronAPI: IElectronAPI;
-    }
+  interface Window { 
+      electronAPI: IElectronAPI;
+  }
 }

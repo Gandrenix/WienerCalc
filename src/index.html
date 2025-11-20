@@ -1,478 +1,709 @@
 <!DOCTYPE html>
-<html>
+<html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>WienerCalc App</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WienerCalc App - Nutrition Manager</title>
     <style>
-        body { font-family: sans-serif; padding: 15px; max-width: 900px; margin: auto; }
-        h1, h2 { border-bottom: 1px solid #ccc; padding-bottom: 5px; margin-top: 25px; color: #333; }
-        h3 { margin-top: 20px; margin-bottom: 10px; }
-        
-        /* --- NUEVO: Estilo para el cursor en <summary> --- */
-        summary { cursor: pointer; }
-        /* Ocultar la flecha por defecto en Chrome/Safari */
-        summary::-webkit-details-marker { display: none; }
-        /* Ocultar la flecha por defecto en Firefox */
-        summary { list-style: none; }
-        /* Añadir un indicador personalizado */
-        summary h2::before {
-            content: '▼ ';
-            font-size: 0.8em;
-            margin-right: 5px;
+        /* --- 1. VARIABLES & RESET --- */
+        :root {
+            --primary: #2563eb; /* Azul moderno */
+            --primary-hover: #1d4ed8;
+            --success: #10b981; /* Verde */
+            --success-hover: #059669;
+            --danger: #ef4444; /* Rojo */
+            --danger-hover: #dc2626;
+            --bg-body: #f3f4f6;
+            --bg-card: #ffffff;
+            --text-main: #1f2937;
+            --text-muted: #6b7280;
+            --border: #e5e7eb;
+            --radius: 8px;
+            --shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
         }
-        details[open] summary h2::before {
-            content: '▲ ';
-        }
-        /* --- Fin de nuevos estilos --- */
 
-        label { display: inline-block; min-width: 150px; margin-bottom: 8px; vertical-align: top; }
-        input[type="text"], input[type="number"], input[type="date"], select {
-            padding: 6px; margin-bottom: 10px; min-width: 200px; border: 1px solid #ccc; border-radius: 3px;
+        * { box-sizing: border-box; }
+
+        body {
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-body);
+            color: var(--text-main);
+            margin: 0;
+            padding: 20px;
+            line-height: 1.5;
         }
-        button { padding: 6px 12px; margin-left: 5px; cursor: pointer; border: 1px solid #aaa; border-radius: 3px; background-color: #f0f0f0; }
-        button:hover { background-color: #e0e0e0; }
-        button[type="submit"] { background-color: #4CAF50; color: white; border-color: #4CAF50; }
-        button[type="submit"]:hover { background-color: #45a049; }
-        .delete-btn { background-color: #f44336; color: white; border-color: #f44336; }
-        .delete-btn:hover { background-color: #da190b; }
-        ul { list-style: none; padding-left: 0; }
-        li { border: 1px solid #eee; padding: 10px; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center; border-radius: 3px; }
-        li span.food-name { flex-grow: 1; margin-right: 10px; font-weight: bold; }
-        hr { margin-top: 30px; margin-bottom: 30px; border: 0; border-top: 1px solid #ccc; }
-        /* Contenedores de secciones */
-        #editFoodFormContainer, #reportCriteria, #analysisCriteria { background-color: #f9f9f9; padding: 20px; border-radius: 5px; border: 1px solid #e0e0e0; margin-bottom: 20px; }
-        /* Estilos de Tablas */
-        #reportResults table, #logEntries table, #statsResults table { width: 100%; border-collapse: collapse; margin-top: 15px; }
-        #reportResults th, #reportResults td, #logEntries table th, #logEntries table td, #statsResults th, #statsResults td { border: 1px solid #ddd; padding: 6px 10px; text-align: left; }
-        #reportResults th, #logEntries table th, #statsResults th { background-color: #f2f2f2; font-weight: bold; }
-        #reportResults td:nth-child(2), #statsResults td:nth-child(2) { text-align: right; } /* Align value */
-        #logEntries table td:nth-child(5) { text-align: right; } /* Align grams */
-        #logEntries table td:last-child { text-align: center; } /* Center actions */
-        small { color: #555; }
+
+        /* --- 2. LAYOUT & CONTAINERS --- */
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
+        }
+
+        header {
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 2px solid var(--border);
+            padding-bottom: 15px;
+        }
+
+        h1 { font-size: 1.5rem; color: var(--primary); margin: 0; }
+        h2 { font-size: 1.25rem; border-bottom: 1px solid var(--border); padding-bottom: 10px; margin-top: 0; margin-bottom: 15px; color: var(--text-main); }
+        h3 { font-size: 1.1rem; margin: 15px 0 10px; color: var(--text-main); }
+
+        .card {
+            background: var(--bg-card);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            padding: 20px;
+            margin-bottom: 20px;
+            border: 1px solid var(--border);
+        }
+
+        /* --- 3. FORMS & INPUTS --- */
+        label {
+            display: block;
+            font-weight: 500;
+            margin-bottom: 5px;
+            font-size: 0.9rem;
+            color: var(--text-main);
+        }
+
+        input[type="text"], input[type="number"], input[type="date"], select, textarea {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            font-size: 0.95rem;
+            margin-bottom: 10px;
+            transition: border-color 0.2s;
+        }
+
+        input:focus, select:focus, textarea:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+        }
+
+        /* Grid para inputs pequeños (Nutrientes) */
+        .nutrient-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 15px;
+        }
+        .nutrient-grid > div { margin-bottom: 0; }
+        .nutrient-grid label { font-size: 0.85rem; color: var(--text-muted); }
+
+        /* --- 4. BUTTONS --- */
+        button {
+            padding: 8px 16px;
+            border-radius: 4px;
+            font-weight: 500;
+            cursor: pointer;
+            border: 1px solid transparent;
+            transition: all 0.2s;
+            background-color: #e5e7eb;
+            color: #374151;
+            font-size: 0.9rem;
+        }
+        button:hover { background-color: #d1d5db; }
+        
+        button:disabled { opacity: 0.6; cursor: not-allowed; }
+
+        /* Botones Primarios (Guardar, Calcular) */
+        button[type="submit"], #saveEditFoodBtn, #calculateBtn, #saveEditLogBtn, #btnSubjSave, #saveNewDbBtn, #btnCreateRdiProfile {
+            background-color: var(--success);
+            color: white;
+        }
+        button[type="submit"]:hover, #saveEditFoodBtn:hover, #calculateBtn:hover { background-color: var(--success-hover); }
+
+        /* Botones de Acción Principal (Azul) */
+        #addDbBtn, #importBtn, #importCsvBtn, #importLogBtn, #importLogCsvBtn, #btnManageSubjects, #btnToggleCreateRdi, #btnImportRdiValues {
+            background-color: var(--primary);
+            color: white;
+        }
+        #addDbBtn:hover { background-color: var(--primary-hover); }
+
+        /* Botones Peligrosos */
+        .delete-btn, #cancelEditFoodBtn, #cancelEditLogBtn {
+            background-color: white;
+            border-color: var(--danger);
+            color: var(--danger);
+        }
+        .delete-btn:hover { background-color: var(--danger); color: white; }
+
+        /* --- 5. UTILITIES & COMPONENTS --- */
+        .flex-row { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+        .flex-between { display: flex; justify-content: space-between; align-items: center; }
+        .hidden { display: none; }
+        .text-right { text-align: right; }
+        .mt-4 { margin-top: 1rem; }
+        
+        hr { border: 0; border-top: 1px solid var(--border); margin: 20px 0; }
+
+        /* Custom Details/Summary */
+        summary { cursor: pointer; list-style: none; display: flex; align-items: center; outline: none; }
+        summary::-webkit-details-marker { display: none; }
+        summary h2 { margin: 0; border: none; display: inline-block; }
+        summary::before {
+            content: '►'; margin-right: 10px; color: var(--text-muted); font-size: 0.8em; transition: transform 0.2s;
+        }
+        details[open] summary::before { transform: rotate(90deg); }
+
+        /* Tables */
+        table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+        th, td { padding: 10px; border-bottom: 1px solid var(--border); text-align: left; }
+        th { background-color: #f9fafb; font-weight: 600; color: var(--text-muted); }
+        
+        /* List Items */
+        ul { padding: 0; list-style: none; }
+        li { background: white; border: 1px solid var(--border); padding: 8px 12px; margin-bottom: 5px; border-radius: 4px; display: flex; justify-content: space-between; align-items: center; }
+
+        /* Modals */
+        .modal-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.5); backdrop-filter: blur(2px);
+            z-index: 1000; display: none; align-items: center; justify-content: center;
+        }
+        .modal-content {
+            background: white; padding: 25px; border-radius: var(--radius);
+            box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+            width: 90%; max-width: 500px; max-height: 90vh; overflow-y: auto;
+        }
+
+        /* Sección del Paciente Activo */
+        .active-patient-bar {
+            background-color: #ecfdf5; border: 1px solid #d1fae5; color: #065f46;
+            padding: 15px; border-radius: var(--radius); margin-bottom: 15px;
+        }
     </style>
 </head>
 <body>
-    <h1>Food Library Management</h1>
-    <div>
-        <label for="dbSelect">Target Database:</label>
-        <select id="dbSelect"></select>
-        <button id="deleteDbBtn" class="delete-btn">Delete Selected DB</button>
-        <button id="purgeDbBtn" class="delete-btn" style="margin-left: 10px;">Purge Foods from DB</button>
-        <button id="addDbBtn" style="margin-left: 20px;">Add New DB</button>
-        <input type="text" id="newDbName" placeholder="New DB Name" style="display: none;">
-        <button id="saveNewDbBtn" style="display: none;">Save DB</button>
-    </div>
-    <hr>
 
-    <h2>Add a New Food (to Library)</h2>
-    <form id="foodForm">
-        <label for="foodName">Food Name:</label>
-        <input type="text" id="foodName" placeholder="e.g., Apple">
-        <button type="submit">Save Food</button>
-    </form>
+<div class="container">
 
-    <details open>
-        <summary><h2>Food List (Library)</h2></summary>
-
-
-
-<div id="foodListControls" style="padding: 10px 0; display: flex; gap: 15px; align-items: center; border-bottom: 1px solid #eee; margin-bottom: 10px;">
-  <div>
-    <label for="foodListSearchInput" style="min-width: 0; margin-bottom: 0;">Buscar:</label>
-    <input type="text" id="foodListSearchInput" placeholder="Buscar en la lista..." style="min-width: 250px; margin-bottom: 0;">
-  </div>
-  <div>
-    <label for="foodListDbFilter" style="min-width: 0; margin-bottom: 0;">Filtrar por BD:</label>
-    <select id="foodListDbFilter" style="min-width: 200px; margin-bottom: 0;">
-      <option value="all">-- Mostrar Todas --</option>
-      </select>
-  </div>
-</div>
-
-
-
-
-
-
-
-        <div id="foodList">
-            <p>Loading food list...</p>
+    <!-- === HEADER & CONFIGURATION === -->
+    <header>
+        <div>
+            <h1>WienerCalc App</h1>
+            <small style="color: var(--text-muted);">Nutritional Analysis & Management</small>
         </div>
-    </details>
+        <!-- DB Selection moved to header for better context -->
+        <div style="text-align: right;">
+            <label for="dbSelect" style="display:inline;">Target Database:</label>
+            <select id="dbSelect" style="width: auto; display: inline-block; margin: 0 5px;"></select>
+            
+            <div style="margin-top: 5px;">
+                <button id="addDbBtn" title="Add New DB">+</button>
+                <button id="deleteDbBtn" class="delete-btn" title="Delete Selected DB">🗑️</button>
+                <button id="purgeDbBtn" class="delete-btn" title="Purge Foods">Purge</button>
+            </div>
+            <!-- Hidden inputs for DB creation logic -->
+            <div style="margin-top: 5px;">
+                <input type="text" id="newDbName" placeholder="New DB Name" style="display: none; width: 150px;">
+                <button id="saveNewDbBtn" style="display: none;">Save</button>
+            </div>
+        </div>
+    </header>
 
-<div id="foodListPagination" style="padding: 10px 0; display: flex; justify-content: space-between; align-items: center; border-top: 1px solid #eee; margin-top: 10px;">
+    <main>
+        <!-- === SECTION 1: FOOD LIBRARY MANAGEMENT === -->
+        <section class="card">
+            <h2>Food Library Management</h2>
+            
+            <div class="flex-row" style="align-items: flex-end; margin-bottom: 20px;">
+                <div style="flex-grow: 1;">
+                    <h3>Add New Food</h3>
+                    <form id="foodForm" class="flex-row" style="margin-top: 0;">
+                        <div style="flex-grow: 1;">
+                            <input type="text" id="foodName" placeholder="e.g., Apple, Banana, Rice..." style="margin-bottom: 0;">
+                        </div>
+                        <button type="submit">Save to Library</button>
+                    </form>
+                </div>
+            </div>
 
-    <div id="pageControlsContainer">
-        <button id="prevPageBtn" disabled>&lt; Anterior</button>
-        <span id="pageIndicator" style="display: inline-block; margin: 0 10px; font-weight: bold;">Página 1 de 1</span>
-        <button id="nextPageBtn" disabled>Siguiente &gt;</button>
+            <hr>
+
+            <!-- Food List -->
+            <details open>
+                <summary><h2>Library Contents</h2></summary>
+                
+                <!-- Filters -->
+                <div id="foodListControls" class="flex-row" style="background: #f9fafb; padding: 10px; border-radius: 4px; margin: 10px 0;">
+                    <div style="flex: 2;">
+                        <label for="foodListSearchInput">Search:</label>
+                        <input type="text" id="foodListSearchInput" placeholder="Search food name..." style="margin-bottom: 0;">
+                    </div>
+                    <div style="flex: 1;">
+                        <label for="foodListDbFilter">Filter by DB:</label>
+                        <select id="foodListDbFilter" style="margin-bottom: 0;">
+                            <option value="all">-- All Databases --</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div id="foodList" style="max-height: 300px; overflow-y: auto; border: 1px solid var(--border); border-radius: 4px; padding: 5px;">
+                    <p style="padding: 10px; text-align: center; color: var(--text-muted);">Loading food list...</p>
+                </div>
+                
+                <!-- Pagination -->
+                <div id="foodListPagination" class="flex-between" style="margin-top: 10px;">
+                    <div id="pageControlsContainer">
+                        <button id="prevPageBtn" disabled>&lt; Prev</button>
+                        <span id="pageIndicator" style="margin: 0 10px; font-weight: bold;">Page 1 of 1</span>
+                        <button id="nextPageBtn" disabled>Next &gt;</button>
+                    </div>
+                    <div>
+                        <input type="checkbox" id="showAllToggle">
+                        <label for="showAllToggle" style="display: inline;">Show All (Grouped)</label>
+                    </div>
+                </div>
+            </details>
+
+            <!-- Import Section (Collapsed inside Library) -->
+            <details style="margin-top: 15px;">
+                <summary><h3 style="display:inline; font-size: 0.9rem;">📥 Import/Export Tools</h3></summary>
+                <div style="padding: 15px; background: #f9fafb; border-radius: 4px; margin-top: 10px;">
+                    <div class="flex-row">
+                        <div style="flex: 1;">
+                            <label for="importDbSelect">Destination DB:</label>
+                            <select id="importDbSelect" style="margin: 0;"></select>
+                        </div>
+                        <div>
+                            <button id="importBtn">Import Excel (.xlsx)</button>
+                            <button id="importCsvBtn">Import CSV</button>
+                        </div>
+                    </div>
+                    <p id="importStatus" style="font-size: 0.8rem; margin-top: 5px;"></p>
+                </div>
+            </details>
+        </section>
+
+        <!-- === SECTION 2: RDI PROFILES === -->
+        <section class="card">
+            <h2>RDI / Nutritional Profiles</h2>
+            <div style="display: grid; grid-template-columns: 1fr auto; gap: 15px; align-items: end;">
+                <div>
+                    <label for="rdiProfileSelect">Active Profile:</label>
+                    <select id="rdiProfileSelect" style="margin-bottom: 0;"></select>
+                </div>
+                <div class="flex-row" style="gap: 5px;">
+                    <button id="btnToggleCreateRdi">+ New</button>
+                    <button id="btnImportRdiValues">📂 Import Excel</button>
+                    <button id="btnDeleteRdiProfile" class="delete-btn">🗑️</button>
+                </div>
+            </div>
+
+            <!-- Create New RDI Inline Form -->
+            <div id="createRdiProfileContainer" class="flex-row" style="display: none; margin-top: 10px; background: #eef2ff; padding: 10px; border-radius: 4px;">
+                <input type="text" id="newRdiProfileName" placeholder="Profile Name (e.g. Pregnancy T1)..." style="margin-bottom: 0; flex-grow: 1;">
+                <button id="btnCreateRdiProfile">Save Profile</button>
+            </div>
+            <p id="rdiStatusMsg" style="font-size: 0.8rem; color: var(--primary); min-height: 1.2em; margin: 5px 0 0;"></p>
+        </section>
+
+        <!-- === SECTION 3: DAILY OPERATIONS (Logs) === -->
+        <section class="card" style="border-top: 4px solid var(--primary);">
+            <div class="flex-between">
+                <h1>Daily Consumption Log</h1>
+                <div style="width: 200px;">
+                     <label for="refDbSelect" style="font-size: 0.8rem;">Search Reference DB:</label>
+                     <select id="refDbSelect" style="padding: 4px;"></select>
+                </div>
+            </div>
+            
+            <!-- Patient Active Bar -->
+            <div class="active-patient-bar">
+                <div class="flex-row">
+                    <div style="flex-grow: 1;">
+                        <label>Active Patient / Subject:</label>
+                        <select id="subjectSelect" style="font-weight: bold; color: #047857;">
+                            <option value="">-- Select or Create Patient --</option>
+                        </select>
+                    </div>
+                    <button id="btnManageSubjects">👤 Manage Patients</button>
+                    <button id="deleteUserLogsBtn" class="delete-btn" title="Clear logs for this user">Clear Logs</button>
+                </div>
+                <input type="hidden" id="userIdInput">
+                <div id="activeSubjectInfo" style="margin-top: 5px; font-size: 0.9rem;"></div>
+            </div>
+
+            <!-- Controls: Date & Actions -->
+            <div class="flex-row" style="margin-bottom: 20px; background: #f9fafb; padding: 15px; border-radius: var(--radius);">
+                <div>
+                    <label for="consumptionDate">Log Date:</label>
+                    <input type="date" id="consumptionDate" style="margin-bottom: 0;">
+                </div>
+                <div style="flex-grow: 1; text-align: right;">
+                    <small style="display: block; margin-bottom: 5px; color: var(--text-muted);">Bulk Actions:</small>
+                    <button id="importLogBtn">Import Log (Excel)</button>
+                    <button id="importLogCsvBtn">Import Log (CSV)</button>
+                    <button id="deleteAllLogsBtn" class="delete-btn">⚠ Delete ALL DB Logs</button>
+                    <span id="importLogStatus" style="font-size: 0.8rem; margin-left: 10px;"></span>
+                </div>
+            </div>
+
+            <!-- Add Entry Form -->
+            <div style="background: #fff; border: 1px solid var(--border); padding: 15px; border-radius: 4px; margin-bottom: 20px;">
+                <h3 style="margin-top: 0;">Add Entry</h3>
+                <form id="logForm" class="flex-row">
+                    <div style="width: 120px;">
+                        <label for="mealTypeSelect">Meal:</label>
+                        <select id="mealTypeSelect" style="margin-bottom: 0;">
+                            <option value="">-- Any --</option>
+                            <option value="Breakfast">Breakfast</option>
+                            <option value="Lunch">Lunch</option>
+                            <option value="Dinner">Dinner</option>
+                            <option value="Snack">Snack</option>
+                        </select>
+                    </div>
+                    <div style="flex-grow: 2;">
+                        <label for="foodSearchInput">Search Food:</label>
+                        <input type="text" id="foodSearchInput" placeholder="Type to search..." style="margin-bottom: 5px;">
+                        <select id="foodSelect" disabled style="margin-bottom: 0; background: #f3f4f6;"></select>
+                    </div>
+                    <div id="gramsInputContainer" style="width: 100px;">
+                        <label for="gramsInput">Grams:</label>
+                        <input type="number" id="gramsInput" placeholder="g" step="0.1" style="margin-bottom: 0;">
+                    </div>
+                    <!-- Hidden by default via JS logic usually, but kept here -->
+                    <div id="portionsInputContainer" style="display: none; width: 100px;">
+                        <label for="portionsInput">Portions:</label>
+                        <input type="number" id="portionsInput" placeholder="1" step="0.25" value="1" style="margin-bottom: 0;">
+                        <small id="recipeYieldLabel"></small>
+                    </div>
+                    <div>
+                        <label>&nbsp;</label> <!-- Spacer -->
+                        <button type="submit" style="background: var(--primary); color: white;">+ Add</button>
+                    </div>
+                </form>
+            </div>
+
+            <!-- Log List -->
+            <details open>
+                <summary><h2>Entries for Selected Date</h2></summary>
+                <div id="logListControls" style="margin: 10px 0;">
+                    <input type="text" id="logSearchInput" placeholder="Filter within logs..." style="width: 100%; max-width: 300px;">
+                </div>
+                
+                <div id="logEntries">
+                    <p class="text-muted">Select a Patient and Date to view entries.</p>
+                </div>
+
+                <div id="logPaginationContainer" class="flex-between" style="margin-top: 15px; border-top: 1px solid var(--border); padding-top: 10px;">
+                    <button id="logPrevPageBtn" disabled>&lt; Prev</button>
+                    <span id="logPageIndicator">Page 1 of 1</span>
+                    <button id="logNextPageBtn" disabled>Next &gt;</button>
+                </div>
+            </details>
+        </section>
+
+        <!-- === SECTION 4: REPORTS & ANALYSIS === -->
+        <section class="card">
+            <h1>Analysis & Reports</h1>
+            
+            <!-- Criteria Box -->
+            <div id="reportCriteria" style="background: #f0f9ff; padding: 20px; border-radius: 4px; border: 1px solid #bae6fd;">
+                <div class="nutrient-grid" style="grid-template-columns: 1fr 1fr 1fr;">
+                    <div>
+                        <label for="reportUserIdInput">User/Group IDs (comma separated):</label>
+                        <input type="text" id="reportUserIdInput" list="userIdDataList" placeholder="e.g., UserA, UserB">
+                        <datalist id="userIdDataList"></datalist>
+                    </div>
+                    <div>
+                        <label>Date Range:</label>
+                        <div style="display: flex; gap: 5px;">
+                            <input type="date" id="reportStartDate">
+                            <span style="align-self: center;">to</span>
+                            <input type="date" id="reportEndDate">
+                        </div>
+                    </div>
+                    <div>
+                        <label for="reportRefDbSelect">DB for Values:</label>
+                        <select id="reportRefDbSelect">
+                            <option value="-1">-- Select --</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="rdiAnalysisProfileSelect">Comparison Profile (RDI):</label>
+                        <select id="rdiAnalysisProfileSelect"></select>
+                    </div>
+                </div>
+                <div class="mt-4 text-right">
+                    <button id="calculateBtn" style="font-size: 1.1rem; padding: 10px 20px;">Calculate Totals & Report</button>
+                </div>
+            </div>
+
+            <!-- Visual Analysis Controls -->
+            <div id="analysisCriteria" class="mt-4">
+                <hr>
+                <h3>Charts & Visuals (v0.3)</h3>
+                <div class="flex-row" style="margin-bottom: 15px;">
+                    <div style="flex-grow: 1;">
+                        <label for="nutrientSelect">Nutrient Focus:</label>
+                        <select id="nutrientSelect">
+                            <option value="totalEnergy_kcal">Energy (kcal)</option>
+                            <!-- JS populates more here -->
+                        </select>
+                    </div>
+                </div>
+
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                    <div style="background: #f9fafb; padding: 15px; border-radius: 4px;">
+                        <strong>Individual Analysis</strong>
+                        <div style="display: flex; gap: 5px; flex-wrap: wrap; margin-top: 10px;">
+                            <button id="renderTopFoodsBtn">Top 5 Sources</button>
+                            <button id="renderMealBtn">By Meal</button>
+                            <button id="renderMacroDistBtn">Macros</button>
+                            <button id="renderOverTimeBtn">Timeline</button>
+                        </div>
+                    </div>
+                    <div style="background: #f9fafb; padding: 15px; border-radius: 4px;">
+                        <strong>Group Analysis</strong>
+                        <div style="display: flex; gap: 5px; flex-wrap: wrap; margin-top: 10px;">
+                            <button id="calcStatsBtn">Statistics</button>
+                            <button id="renderHistogramBtn">Histogram</button>
+                            <button id="renderBoxPlotBtn">Box Plot</button>
+                            <button id="renderAdequacyBtn">Adequacy %</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Chart Area -->
+            <div id="chartContainer" style="width: 100%; height: 450px; border: 1px solid #ccc; display: none; margin-top: 20px; background: white;"></div>
+            <div id="multiChartContainer" style="margin-top: 20px; display: flex; flex-wrap: wrap; gap: 20px;"></div>
+            
+            <!-- Text Results -->
+            <div id="statsResults" style="margin-top: 20px;"></div>
+            
+            <!-- Table Results -->
+            <div class="flex-between mt-4">
+                <h3>Detailed Results</h3>
+                <div id="exportControls" style="display: none;">
+                    <button id="exportCsvBtn">Export CSV</button>
+                    <button id="exportExcelBtn">Export Excel</button>
+                </div>
+            </div>
+            <div id="reportResults" style="overflow-x: auto;">
+                <p class="text-muted">Results will appear here after calculation.</p>
+            </div>
+        </section>
+    </main>
+
+</div> <!-- End Container -->
+
+<!-- === MODALS (Hidden by default) === -->
+
+<!-- 1. EDIT FOOD MODAL -->
+<!-- Nota: He movido el contenedor de edición fuera del flujo principal a una estructura 'oculta' 
+     que tu JS alterna entre display:block/none. -->
+<div id="editFoodFormContainer" class="card" style="display: none; position: fixed; top: 5%; left: 50%; transform: translateX(-50%); width: 90%; max-width: 800px; max-height: 90vh; overflow-y: auto; z-index: 2000; box-shadow: 0 0 500px rgba(0,0,0,0.5);">
+    <div class="flex-between">
+        <h2>Edit Food Details</h2>
+        <button id="cancelEditFoodBtn" style="padding: 5px 10px;">X</button>
     </div>
-
-    <div>
-        <input type="checkbox" id="showAllToggle" style="margin-right: 5px;">
-        <label for="showAllToggle" style="min-width: 0; margin-bottom: 0;">Mostrar Todo (Agrupado)</label>
-    </div>
-
-</div>
-
-
-
-
-
-    <div id="editFoodFormContainer" style="display: none; margin-top: 20px; padding: 15px; border: 1px solid #ccc;">
-    <h2>Edit Food Details</h2>
     <input type="hidden" id="editFoodId">
     
-    <div>
-  <label for="editFoodName">Food Name:</label>
-  <input type="text" id="editFoodName">
- </div>
-
-    <div>
-      <label for="editFoodType">Food Type:</label>
-      <select id="editFoodType">
-        <option value="simple">Simple Food (Nutrients)</option>
-        <option value="recipe">Recipe (Ingredients)</option>
-      </select>
+    <div class="flex-row">
+        <div style="flex: 2;">
+            <label for="editFoodName">Name:</label>
+            <input type="text" id="editFoodName">
+        </div>
+        <div style="flex: 1;">
+            <label for="editFoodType">Type:</label>
+            <select id="editFoodType">
+                <option value="simple">Simple Food</option>
+                <option value="recipe">Recipe</option>
+            </select>
+        </div>
     </div>
 
-    <hr style="margin-top: 15px; margin-bottom: 15px;">
-
+    <!-- TABS for Nutrients (Grid Layout) -->
     <div id="simpleFoodNutrients">
-      <h3>Macronutrients & Energy</h3>
-      <div><label for="editEnergyKcal">Energy (kcal):</label><input type="number" step="any" id="editEnergyKcal" placeholder="e.g., 89"></div>
-      <div><label for="editWaterG">Water (g):</label><input type="number" step="any" id="editWaterG" placeholder="e.g., 75.5"></div>
-      <div><label for="editProteinG">Protein (g):</label><input type="number" step="any" id="editProteinG" placeholder="e.g., 1.1"></div>
-      <div><label for="editFatG">Total Fat (g):</label><input type="number" step="any" id="editFatG" placeholder="e.g., 0.3"></div>
-      <div><label for="editCarbohydrateG">Carbohydrate (g):</label><input type="number" step="any" id="editCarbohydrateG" placeholder="e.g., 22.8"></div>
-      <div><label for="editFiberG">Fiber (g):</label><input type="number" step="any" id="editFiberG" placeholder="e.g., 2.6"></div>
-      <div><label for="editSugarG">Sugar (g):</label><input type="number" step="any" id="editSugarG" placeholder="e.g., 12.2"></div>
-      <div><label for="editAshG">Ash (g):</label><input type="number" step="any" id="editAshG" placeholder="e.g., 0.3"></div>
-      
-      <hr style="margin-top: 15px; margin-bottom: 15px;">
-      <h3>Fat Details</h3>
-      <div><label for="editSaturatedFatG">Saturated Fat (g):</label><input type="number" step="any" id="editSaturatedFatG" placeholder="e.g., 0.1"></div>
-      <div><label for="editMonounsaturatedFatG">Monounsaturated Fat (g):</label><input type="number" step="any" id="editMonounsaturatedFatG" placeholder="e.g., 0.05"></div>
-      <div><label for="editPolyunsaturatedFatG">Polyunsaturated Fat (g):</label><input type="number" step="any" id="editPolyunsaturatedFatG" placeholder="e.g., 0.1"></div>
-      <div><label for="editCholesterolMg">Cholesterol (mg):</label><input type="number" step="any" id="editCholesterolMg" placeholder="e.g., 0"></div>
-
-      <hr style="margin-top: 15px; margin-bottom: 15px;">
-      <h3>Minerals</h3>
-      <div><label for="editCalciumMg">Calcium (mg):</label><input type="number" step="any" id="editCalciumMg" placeholder="e.g., 5"></div>
-      <div><label for="editPhosphorusMg">Phosphorus (mg):</label><input type="number" step="any" id="editPhosphorusMg" placeholder="e.g., 11"></div>
-      <div><label for="editIronMg">Iron (mg):</label><input type="number" step="any" id="editIronMg" placeholder="e.g., 0.12"></div>
-      <div><label for="editSodiumMg">Sodium (mg):</label><input type="number" step="any" id="editSodiumMg" placeholder="e.g., 1"></div>
-      <div><label for="editPotassiumMg">Potassium (mg):</label><input type="number" step="any" id="editPotassiumMg" placeholder="e.g., 107"></div>
-      <div><label for="editMagnesiumMg">Magnesium (mg):</label><input type="number" step="any" id="editMagnesiumMg" placeholder="e.g., 5"></div>
-      <div><label for="editZincMg">Zinc (mg):</label><input type="number" step="any" id="editZincMg" placeholder="e.g., 0.04"></div>
-      <div><label for="editCopperMg">Copper (mg):</label><input type="number" step="any" id="editCopperMg" placeholder="e.g., 0.03"></div>
-      <div><label for="editManganeseMg">Manganese (mg):</label><input type="number" step="any" id="editManganeseMg" placeholder="e.g., 0.04"></div>
-
-      <hr style="margin-top: 15px; margin-bottom: 15px;">
-      <h3>Vitamins</h3>
-      <div><label for="editVitaminAER">Vitamin A (ER/µg):</label><input type="number" step="any" id="editVitaminAER" placeholder="e.g., 3"></div>
-      <div><label for="editThiaminMg">Thiamin (B1) (mg):</label><input type="number" step="any" id="editThiaminMg" placeholder="e.g., 0.02"></div>
-      <div><label for="editRiboflavinMg">Riboflavin (B2) (mg):</label><input type="number" step="any" id="editRiboflavinMg" placeholder="e.g., 0.03"></div>
-      <div><label for="editNiacinMg">Niacin (B3) (mg):</label><input type="number" step="any" id="editNiacinMg" placeholder="e.g., 0.09"></div>
-      <div><label for="editPantothenicAcidMg">Pantothenic Acid (B5) (mg):</label><input type="number" step="any" id="editPantothenicAcidMg" placeholder="e.g., 0.06"></div>
-      <div><label for="editVitaminB6Mg">Vitamin B6 (mg):</label><input type="number" step="any" id="editVitaminB6Mg" placeholder="e.g., 0.04"></div>
-      <div><label for="editFolateMcg">Folate (B9) (µg):</label><input type="number" step="any" id="editFolateMcg" placeholder="e.g., 3"></div>
-      <div><label for="editVitaminB12Mcg">Vitamin B12 (µg):</label><input type="number" step="any" id="editVitaminB12Mcg" placeholder="e.g., 0"></div>
-      <div><label for="editVitaminCMg">Vitamin C (mg):</label><input type="number" step="any" id="editVitaminCMg" placeholder="e.g., 4.6"></div>
-    </div>
-    
- <div id="recipeIngredients" style="display: none;">
-      <h3>Recipe Ingredients</h3>
-      
-      <div id="addIngredientForm" style="padding: 10px; background: #f9f9f9; border: 1px solid #ddd; border-radius: 4px;">
-        <div>
-          <label for="recipeFoodSearchInput" style="min-width: 120px;">Search Ingredient:</label>
-          <input type="text" id="recipeFoodSearchInput" placeholder="Search all food libraries...">
+        <h3 style="background: #eee; padding: 5px;">Macronutrients</h3>
+        <div class="nutrient-grid">
+            <div><label>Energy (kcal)</label><input type="number" step="any" id="editEnergyKcal"></div>
+            <div><label>Water (g)</label><input type="number" step="any" id="editWaterG"></div>
+            <div><label>Protein (g)</label><input type="number" step="any" id="editProteinG"></div>
+            <div><label>Total Fat (g)</label><input type="number" step="any" id="editFatG"></div>
+            <div><label>Carbs (g)</label><input type="number" step="any" id="editCarbohydrateG"></div>
+            <div><label>Fiber (g)</label><input type="number" step="any" id="editFiberG"></div>
+            <div><label>Sugar (g)</label><input type="number" step="any" id="editSugarG"></div>
+            <div><label>Ash (g)</label><input type="number" step="any" id="editAshG"></div>
         </div>
-        <div>
-          <label for="recipeFoodSelect" style="min-width: 120px;">Select Food:</label>
-          <select id="recipeFoodSelect" disabled>
-            <option value="">-- Type to search --</option>
-          </select>
-        </div>
-        <div>
-          <label for="recipeGramsInput" style="min-width: 120px;">Grams:</label>
-          <input type="number" id="recipeGramsInput" placeholder="e.g., 100" step="0.1">
-          <button type="button" id="addIngredientBtn" style="margin-left: 10px;">Add Ingredient</button>
-        </div>
-      </div>
-      
-      <div id="ingredientListContainer" style="margin-top: 15px;">
-        <h4>Current Ingredients:</h4>
-        <ul id="ingredientList">
-          </ul>
-      </div>
 
+        <h3 style="background: #eee; padding: 5px;">Lipids</h3>
+        <div class="nutrient-grid">
+            <div><label>Saturated (g)</label><input type="number" step="any" id="editSaturatedFatG"></div>
+            <div><label>Mono (g)</label><input type="number" step="any" id="editMonounsaturatedFatG"></div>
+            <div><label>Poly (g)</label><input type="number" step="any" id="editPolyunsaturatedFatG"></div>
+            <div><label>Cholest. (mg)</label><input type="number" step="any" id="editCholesterolMg"></div>
+        </div>
+
+        <h3 style="background: #eee; padding: 5px;">Minerals</h3>
+        <div class="nutrient-grid">
+            <div><label>Calcium (mg)</label><input type="number" step="any" id="editCalciumMg"></div>
+            <div><label>Phosphorus (mg)</label><input type="number" step="any" id="editPhosphorusMg"></div>
+            <div><label>Iron (mg)</label><input type="number" step="any" id="editIronMg"></div>
+            <div><label>Sodium (mg)</label><input type="number" step="any" id="editSodiumMg"></div>
+            <div><label>Potassium (mg)</label><input type="number" step="any" id="editPotassiumMg"></div>
+            <div><label>Magnesium (mg)</label><input type="number" step="any" id="editMagnesiumMg"></div>
+            <div><label>Zinc (mg)</label><input type="number" step="any" id="editZincMg"></div>
+            <div><label>Copper (mg)</label><input type="number" step="any" id="editCopperMg"></div>
+            <div><label>Manganese (mg)</label><input type="number" step="any" id="editManganeseMg"></div>
+        </div>
+
+        <h3 style="background: #eee; padding: 5px;">Vitamins</h3>
+        <div class="nutrient-grid">
+            <div><label>Vit A (ER)</label><input type="number" step="any" id="editVitaminAER"></div>
+            <div><label>B1 Thiamin</label><input type="number" step="any" id="editThiaminMg"></div>
+            <div><label>B2 Riboflavin</label><input type="number" step="any" id="editRiboflavinMg"></div>
+            <div><label>B3 Niacin</label><input type="number" step="any" id="editNiacinMg"></div>
+            <div><label>B5 Panto.</label><input type="number" step="any" id="editPantothenicAcidMg"></div>
+            <div><label>B6</label><input type="number" step="any" id="editVitaminB6Mg"></div>
+            <div><label>B9 Folate</label><input type="number" step="any" id="editFolateMcg"></div>
+            <div><label>B12</label><input type="number" step="any" id="editVitaminB12Mcg"></div>
+            <div><label>Vit C</label><input type="number" step="any" id="editVitaminCMg"></div>
+        </div>
     </div>
 
-    <div style="margin-top: 20px;">
-      <button id="saveEditFoodBtn">Save Changes</button>
-      <button id="cancelEditFoodBtn">Cancel</button>
+    <!-- Recipe Ingredients Panel -->
+    <div id="recipeIngredients" style="display: none; margin-top: 15px;">
+        <h3>Recipe Ingredients</h3>
+        <div id="addIngredientForm" style="background: #f9f9f9; padding: 15px; border: 1px solid #ddd; border-radius: 4px;">
+             <div class="flex-row">
+                 <div style="flex: 2;">
+                    <label>Search:</label>
+                    <input type="text" id="recipeFoodSearchInput" placeholder="Ingredient name...">
+                 </div>
+                 <div style="flex: 2;">
+                    <label>Select:</label>
+                    <select id="recipeFoodSelect" disabled><option>-- Type to search --</option></select>
+                 </div>
+                 <div style="flex: 1;">
+                    <label>Grams:</label>
+                    <input type="number" id="recipeGramsInput" step="0.1">
+                 </div>
+                 <button type="button" id="addIngredientBtn" style="background: var(--primary); color: white;">Add</button>
+             </div>
+        </div>
+        <div id="ingredientListContainer" style="margin-top: 15px;">
+            <h4>Components:</h4>
+            <ul id="ingredientList"></ul>
+        </div>
     </div>
-  </div>
 
-  <hr style="margin-top: 30px; margin-bottom: 30px; border-top: 2px dashed #ccc;">
-    
-    <h2>Gestión de Perfiles Nutricionales (RDI)</h2>
-    <div style="background-color: #f0f7ff; padding: 15px; border-radius: 5px; border: 1px solid #d0e3ff;">
-        <p style="margin-top: 0; font-size: 0.9em; color: #555;">
-            Selecciona o crea un perfil de requerimientos (ej. "RDA Colombia - Hombres") para usarlo en los reportes de adecuación.
-        </p>
+    <div class="mt-4 text-right" style="position: sticky; bottom: 0; background: white; padding-top: 10px; border-top: 1px solid #eee;">
+        <button id="saveEditFoodBtn">Save Changes</button>
+    </div>
+</div>
+
+<!-- 2. EDIT LOG ENTRY MODAL -->
+<div id="editLogModal" class="modal-overlay" style="display: none;"> <!-- Flex via JS -->
+    <div class="modal-content">
+        <h3 id="editLogTitle" style="margin-top: 0;">Edit Grams</h3>
+        <p>Updating: <strong id="editLogFoodName"></strong></p>
+        <input type="hidden" id="editLogId">
         
-        <div style="display: flex; gap: 10px; align-items: flex-end;">
-            <div style="flex-grow: 1;">
-                <label for="rdiProfileSelect" style="display: block; margin-bottom: 5px;">Perfil Actual:</label>
-                <select id="rdiProfileSelect" style="width: 100%; padding: 8px;">
-                    <option value="">Cargando...</option>
+        <label for="editLogGramsInput">Grams:</label>
+        <input type="number" step="any" id="editLogGramsInput" placeholder="e.g., 150" style="font-size: 1.2rem;">
+        
+        <div class="text-right mt-4">
+            <button id="cancelEditLogBtn">Cancel</button>
+            <button id="saveEditLogBtn">Update</button>
+        </div>
+    </div>
+</div>
+
+<!-- 3. PATIENT/SUBJECT MANAGER MODAL -->
+<div id="subjectModal" class="modal-overlay" style="display: none;"> <!-- Flex via JS -->
+    <div class="modal-content" style="max-width: 600px;">
+        <h2 style="margin-top: 0;">Patient Profile</h2>
+        
+        <div class="flex-row">
+            <div style="flex: 1;">
+                <label>Unique ID (Required):</label>
+                <input type="text" id="subjId" placeholder="ID Number / CC">
+            </div>
+            <div style="flex: 2;">
+                <label>Full Name:</label>
+                <input type="text" id="subjName" placeholder="Optional">
+            </div>
+        </div>
+
+        <div class="flex-row">
+            <div style="flex: 1;">
+                <label>Birth Date:</label>
+                <input type="date" id="subjBirth">
+            </div>
+            <div style="flex: 1;">
+                <label>Gender:</label>
+                <select id="subjGender">
+                    <option value="M">Male</option>
+                    <option value="F">Female</option>
                 </select>
             </div>
-            <button id="btnImportRdiValues" style="height: 36px;">📂 Importar Valores (Excel)</button>
         </div>
 
-        <div style="margin-top: 15px; display: flex; gap: 10px; align-items: center;">
-            <span style="font-weight: bold;">Nuevo Perfil:</span>
-            <input type="text" id="newRdiProfileName" placeholder="Nombre del nuevo perfil..." style="margin-bottom: 0; flex-grow: 1;">
-            <button id="btnCreateRdiProfile" style="background-color: #4CAF50; color: white;">+ Crear</button>
+        <div class="flex-row">
+            <div style="flex: 1;">
+                <label>Weight (kg):</label>
+                <input type="number" id="subjWeight" step="0.1">
+            </div>
+            <div style="flex: 1;">
+                <label>Height (cm):</label>
+                <input type="number" id="subjHeight" step="1">
+            </div>
         </div>
-        <p id="rdiStatusMsg" style="margin-bottom: 0; margin-top: 10px; font-style: italic; color: #666;"></p>
-    </div>
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    <hr>
-    <h2>Import Food Library</h2>
-    <label for="importDbSelect">Import into Database:</label>
-     <select id="importDbSelect"></select>
-    <button id="importBtn">Import from Excel (.xlsx)</button>
-    <button id="importCsvBtn" style="margin-left: 10px;">Import from CSV (.csv)</button>
-    <p id="importStatus"></p>
-
-    <hr style="border-top: 3px solid #000; margin-top: 40px;">
-    <h1>Daily Consumption Log</h1>
-
-    <div>
-        <label for="refDbSelect">Reference DB:</label>
-        <select id="refDbSelect">
-            </select>
-    </div>
-    <div>
-    
-        <label for="userIdInput">User/Group ID:</label>
-        <input type="text" id="userIdInput" list="userIdDataList" placeholder="Enter or select User ID">
-        <button id="deleteUserLogsBtn" class="delete-btn" style="min-width: 0; margin-left: 5px;" title="Delete All Logs for this User">Delete User Logs</button>
-</div>
-    <div>
-        <label for="consumptionDate">Date:</label>
-        <input type="date" id="consumptionDate">
-    </div>
-
-    <div style="margin-top: 15px; margin-bottom: 15px; padding: 10px; background-color: #f5f5f5; border: 1px solid #ddd;">
-        <strong>Import Log Entries:</strong>
-        <button id="importLogBtn" style="margin-left: 10px;">Import Log from Excel (.xlsx)</button>
-        <button id="importLogCsvBtn" style="margin-left: 10px;">Import Log from CSV (.csv)</button>
-        <p id="importLogStatus" style="display: inline; margin-left: 10px;"></p>
-        <button id="deleteAllLogsBtn" class="delete-btn" style="margin-left: 20px; float: right;">Delete ALL Log Entries (DANGER)</button>
-    </div>
-
-    <h2>Add Log Entry</h2>
-    <form id="logForm">
-         <div>
-            <label for="mealTypeSelect">Meal Type (Opt.):</label>
-            <select id="mealTypeSelect">
-                <option value="">-- Select --</option>
-                <option value="Breakfast">Breakfast</option>
-                <option value="Lunch">Lunch</option>
-                <option value="Dinner">Dinner</option>
-                <option value="Snack">Snack</option>
-            </select>
-         </div>
-         <div>
-            <label for="foodSearchInput">Search Food:</label>
-            <input type="text" id="foodSearchInput" placeholder="Type to search in Reference DB...">
-            <select id="foodSelect" disabled>
-                <option value="">-- Select Food --</option>
-            </select>
-         </div>
-
-         <div id="gramsInputContainer">
-          <label for="gramsInput">Grams:</label>
-         <input type="number" id="gramsInput" placeholder="e.g., 150" step="0.1">
-         </div>
- 
-         <div id="portionsInputContainer" style="display: none;">
-         <label for="portionsInput">Portions:</label>
-         <input type="number" id="portionsInput" placeholder="e.g., 1" step="0.25" value="1">
-         <small id="recipeYieldLabel" style="margin-left: 10px;"></small>
-         </div>
-
-         
-         <button type="submit">Add Entry</button>
-         </form>
-
-         <details open>
-         <summary><h2>Log Entries for Selected Date</h2></summary>
-         
-         <div id="logListControls" style="padding: 10px 0; display: flex; gap: 15px; align-items: center; border-bottom: 1px solid #eee; margin-bottom: 10px;">
-  <div>
-    <label for="logSearchInput" style="min-width: 0; margin-bottom: 0;">Buscar en Logs:</label>
-    <input type="text" id="logSearchInput" placeholder="Buscar por alimento, comida..." style="min-width: 250px; margin-bottom: 0;">
-  </div>
-  <small><i>(Los campos UserID y Date de arriba ahora actúan como filtros)</i></small>
-</div>
-         
-         
-         <div id="logEntries">
-            <p>Select User/Group and Date above to see entries.</p>
-         </div>
-    </details>
-
-
-<div id="logPaginationContainer" style="padding: 10px 0; display: flex; justify-content: center; align-items: center; border-top: 1px solid #eee; margin-top: 10px;">
-  <button id="logPrevPageBtn" disabled>&lt; Anterior</button>
-  <span id="logPageIndicator" style="display: inline-block; margin: 0 10px; font-weight: bold;">Página 1 de 1</span>
-  <button id="logNextPageBtn" disabled>Siguiente &gt;</button>
-</div>
-
-
-
-
-
-
-
-
-    <hr style="border-top: 3px solid #000; margin-top: 40px;">
-    <h1>Nutrient Calculation & Reporting</h1>
-
-    <div id="reportCriteria">
         <div>
-            <label for="reportUserIdInput">User/Group ID(s):</label>
-            <input type="text" id="reportUserIdInput" list="userIdDataList" placeholder="e.g., UserA, UserB, UserC">
-            <small style="margin-left: 155px; display: block;">Separa múltiples UserIDs con coma (,) para análisis de grupo.</small>
-        </div>
-        <div>
-            <label for="reportStartDate">Start Date:</label>
-            <input type="date" id="reportStartDate">
-            <label for="reportEndDate" style="margin-left: 10px;">End Date:</label>
-            <input type="date" id="reportEndDate">
-        </div>
-        <div>
-            <label for="reportRefDbSelect">Reference Database:</label>
-            <select id="reportRefDbSelect">
-                <option value="-1">-- Select Database --</option>
+            <label>Physiological State:</label>
+            <select id="subjPhysio">
+                <option value="None">None</option>
+                <option value="Pregnancy">Pregnancy</option>
+                <option value="Lactation">Lactation</option>
             </select>
         </div>
 
-        <div style="margin-top: 10px;">
-        <label for="rdiAnalysisProfileSelect">Perfil de Comparación (RDI):</label>
-        <select id="rdiAnalysisProfileSelect">
-        </select>
-        </div>
-
-
-
-
         <div>
-            <button id="calculateBtn">Calculate TOTALS (Table)</button>
+            <label>Clinical Notes:</label>
+            <textarea id="subjNotes" style="height: 80px;"></textarea>
         </div>
-    </div>
 
-    <hr>
-    <h2>Analysis & Graphs (v0.3)</h2>
-    <div id="analysisCriteria">
-        <div>
-            <label for="nutrientSelect">Nutrient to Analyze:</label>
-            <select id="nutrientSelect">
-                <option value="totalEnergy_kcal">Energy (kcal)</option>
-                </select>
-        </div>
+        <hr>
         
-        <div style="margin-top: 15px;">
-            <strong>Epidemiology (Group Analysis):</strong><br>
-            <button id="calcStatsBtn" style="margin-left:0;">Get Group Statistics</button>
-            <button id="renderHistogramBtn">Show Distribution (Histogram)</button>
-            <button id="renderBoxPlotBtn">Compare Groups (Box Plot)</button>
-            <button id="renderAdequacyBtn">Adecuación Nutricional (% RDI)</button>
-        </div>
-        
-        <div style="margin-top: 15px;">
-            <strong>Nutrition (Individual Analysis):</strong><br>
-            <small><i>Nota: Para análisis individual, ingrese solo un UserID en el campo de arriba.</i></small><br>
-            <button id="renderTopFoodsBtn" style="margin-left:0;">Top 5 Food Sources (Pie)</button>
-            <button id="renderMealBtn">Intake by Meal (Pie)</button>
-            <button id="renderAdequacyBtn">Adecuación Nutricional (% RDI)</button>
-            <button id="renderMacroDistBtn">Macro Distribution (Dona)</button> <button id="renderOverTimeBtn">Intake Over Time (Line)</button>
-        </div>
-    </div>
+        <details>
+            <summary><strong>📜 Measurement History</strong></summary>
+            <div style="max-height: 150px; overflow-y: auto; margin-top: 10px; border: 1px solid var(--border);">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Date</th> <th class="text-right">Weight</th> <th class="text-right">Height</th> <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="historyTableBody"></tbody>
+                </table>
+            </div>
+        </details>
 
-    <div id="chartContainer" style="width: 100%; height: 450px; border: 1px solid #ccc; display: none; margin-top: 20px;">
+        <div style="margin-top: 20px; display: flex; justify-content: space-between; align-items: center;">
+            <button id="btnSubjDelete" class="delete-btn" style="display: none;">Delete User</button>
+            <div>
+                <span id="subjMsg" style="margin-right: 10px; font-size: 0.8rem; color: var(--success);"></span>
+                <button id="btnSubjCancel">Cancel</button>
+                <button id="btnSubjSave">Save Profile</button>
+            </div>
         </div>
-
-<div id="chartContainer" style="width: 100%; height: 450px; border: 1px solid #ccc; display: none; margin-top: 20px;">
+    </div> 
 </div>
-<div id="multiChartContainer" style="margin-top: 20px; display: flex; flex-wrap: wrap; gap: 20px;">
-</div>
 
+<!-- DEPENDENCIES -->
+<script src="../node_modules/echarts/dist/echarts.min.js"></script>
+<script src="../node_modules/echarts/dist/extension/dataTool.min.js"></script>
+<script src="../dist/renderer.js"></script>
 
-
-
-
-    <div id="statsResults" style="margin-top: 20px;">
-        </div>
-    
-    <h2>Report Results (Totals Table)</h2>
-    <div id="exportControls" style="margin-bottom: 15px; display: none;">
-        <button id="exportCsvBtn">Export as CSV</button>
-        <button id="exportExcelBtn">Export as Excel (.xlsx)</button>
-    </div>
-
-    <div id="reportResults">
-        <p>Please select criteria and click "Calculate Intake".</p>
-    </div>
-
-    <datalist id="userIdDataList">
-        </datalist>
-
-    <div id="editLogModal" style="display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #f0f0f0; border: 1px solid #999; padding: 25px; border-radius: 8px; box-shadow: 0 5px 15px rgba(0,0,0,0.3); z-index: 100;">
-        <h3 id="editLogTitle" style="margin-top: 0;">Edit Grams</h3>
-        <p>Updating entry for: <strong id="editLogFoodName"></strong></p>
-        <input type="hidden" id="editLogId">
-        <div>
-            <label for="editLogGramsInput" style="min-width: 50px;">Grams:</label>
-            <input type="number" step="any" id="editLogGramsInput" placeholder="e.g., 150">
-        </div>
-        <div style="margin-top: 20px; text-align: right;">
-            <button id="cancelEditLogBtn">Cancel</button>
-            <button id="saveEditLogBtn" style="background-color: #4CAF50; color: white;">Save Grams</button>
-        </div>
-    </div>
-    
-    <script src="../node_modules/echarts/dist/echarts.min.js"></script>
-    <script src="../node_modules/echarts/dist/extension/dataTool.min.js"></script>
-    
-    <script src="../dist/renderer.js"></script>
 </body>
 </html>
